@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { User, Trophy, FileText, CheckCircle, XCircle, Clock, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { getUserProfile, UserProfile } from "@/lib/firebase-services";
+import { getUserProfile, UserProfile, getBadgeFromScore } from "@/lib/firebase-services";
 
 interface ProfilePopupProps {
   children: React.ReactNode;
@@ -19,10 +19,10 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
   const { userData, signOut } = useAuth();
   const { toast } = useToast();
 
-  // Fetch user profile when component mounts or userData changes
+  // Fetch user profile when opened / user changes so badge matches latest score
   useEffect(() => {
     const fetchUserProfile = async () => {
-      if (userData?.uid) {
+      if (userData?.uid && isOpen) {
         try {
           const profile = await getUserProfile(userData.uid);
           setUserProfile(profile);
@@ -33,7 +33,7 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
     };
 
     fetchUserProfile();
-  }, [userData?.uid]);
+  }, [userData?.uid, isOpen]);
 
   const handleLogout = async () => {
     try {
@@ -52,14 +52,13 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
     }
   };
 
-  const getCurrentBadge = (role: string) => {
-    // Admin users get special badges
-    if (role === 'admin') {
+  const getCurrentBadge = (profile: UserProfile) => {
+    if (profile.role === 'admin') {
       return '👑 Administrator';
     }
-    
-    // For citizens, we'll show a simple status
-    return '👤 Citizen';
+
+    // Always derive from score so UI matches thresholds (100 → Elite, 75 → Gold, etc.)
+    return getBadgeFromScore(Number(profile.score || 0)).badge;
   };
 
   if (!userData) return null;
@@ -100,8 +99,8 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
                   <Trophy className="h-4 w-4 text-primary" />
                   <span className="text-sm font-medium">Badge</span>
                 </div>
-                                <Badge variant="outline" className="text-xs">
-                  {userProfile ? getCurrentBadge(userProfile.role) : 'Loading...'}
+                <Badge variant="outline" className="text-xs">
+                  {userProfile ? getCurrentBadge(userProfile) : 'Loading...'}
                 </Badge>
               </div>
               

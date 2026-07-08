@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Search, Filter, MapPin, AlertTriangle, CheckCircle, XCircle, Clock, Users, Phone, Globe, Star, Shield } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { getAllIncidents, updateIncidentStatus, Incident, getRecommendedUsers, UserProfile } from "@/lib/firebase-services";
+import { getAllIncidents, updateIncidentStatus, Incident, getRecommendedUsers, UserProfile, saveAgentDispatchResult } from "@/lib/firebase-services";
 import { ProfilePopup } from "@/components/ProfilePopup";
 import { findRealEmergencyServices, EmergencyService, getEmergencyContacts, generateLocalEmergencyServices } from "@/lib/emergency-services";
 import { useAuth } from "@/contexts/AuthContext";
@@ -19,6 +19,8 @@ import {
   getIncidentSeverity,
   formatSeverity,
 } from "@/lib/severity";
+import { resolveNearLocationLabel } from "@/lib/location-label";
+import { runAgenticAutoDispatch, shouldAutoEscalate } from "@/lib/agent-dispatch";
 
 // Using the Incident interface from Firebase services
 type Report = Incident;
@@ -33,6 +35,7 @@ const AdminDashboard = () => {
   const [showAuthoritiesModal, setShowAuthoritiesModal] = useState(false);
   const [currentAuthorities, setCurrentAuthorities] = useState<EmergencyService[]>([]);
   const [currentIncident, setCurrentIncident] = useState<Report | null>(null);
+  const [locationLabels, setLocationLabels] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const { userData } = useAuth();
   const navigate = useNavigate();
@@ -41,11 +44,87 @@ const AdminDashboard = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [allIncidents, recommended] = await Promise.all([
+        const [allIncidentsRaw, recommended] = await Promise.all([
           getAllIncidents(),
           getRecommendedUsers()
         ]);
-        setReports(allIncidents);
+
+        // Merge recommended-user scores when incident join is incomplete
+        const scoreByUserId = new Map(
+          recommended
+            .filter((user) => user.id)
+            .map((user) => [user.id!, Number(user.score || 0)])
+        );
+        const allIncidents = allIncidentsRaw.map((incident) => {
+          const fallbackScore = scoreByUserId.get(incident.userId);
+          const score = Number(
+            incident.userScore && incident.userScore > 0
+              ? incident.userScore
+              : fallbackScore ?? incident.userScore ?? 0
+          );
+          return {
+            ...incident,
+            userScore: score,
+            userBadge:
+              score >= 100
+                ? '🏆 Elite Citizen'
+                : score >= 75
+                  ? '⭐ Gold Citizen'
+                  : incident.userBadge,
+          };
+        });
+
+        // Backfill: Elite (score >= 100) + severity 5 pending reports that missed auto-dispatch
+        const eligible = allIncidents.filter(
+          (incident) =>
+            !incident.agentDispatch?.triggered &&
+            incident.status === 'pending' &&
+            shouldAutoEscalate(incident.userScore, getIncidentSeverity(incident))
+        );
+
+        console.log(
+          'AdminDashboard: auto-dispatch candidates',
+          eligible.map((i) => ({
+            id: i.id,
+            score: i.userScore,
+            severity: getIncidentSeverity(i),
+            status: i.status,
+          }))
+        );
+
+        let incidents = allIncidents;
+        if (eligible.length > 0) {
+          const updates = await Promise.all(
+            eligible.map(async (incident) => {
+              try {
+                return await dispatchEliteReport(incident, { silent: true });
+              } catch (error) {
+                console.error('Backfill auto-dispatch failed for', incident.id, error);
+                toast({
+                  title: "Auto-dispatch failed",
+                  description: error instanceof Error ? error.message : `Could not dispatch ${incident.id}`,
+                  variant: "destructive",
+                });
+                return null;
+              }
+            })
+          );
+
+          const byId = new Map(
+            updates.filter(Boolean).map((item) => [item!.id!, item!])
+          );
+          if (byId.size > 0) {
+            incidents = allIncidents.map((incident) =>
+              incident.id && byId.has(incident.id) ? byId.get(incident.id)! : incident
+            );
+            toast({
+              title: "Agent Auto-Dispatched",
+              description: `${byId.size} Elite severity-5 report(s) sent to nearest authorities.`,
+            });
+          }
+        }
+
+        setReports(incidents);
         setRecommendedUsers(recommended);
       } catch (error) {
         console.error('Error loading data:', error);
@@ -60,6 +139,74 @@ const AdminDashboard = () => {
     loadData();
   }, [toast]);
 
+  // Resolve precise "near Place (lat, lng)" labels (street/locality, not just city)
+  useEffect(() => {
+    let cancelled = false;
+
+    const resolveLabels = async () => {
+      const uniqueReports = reports.filter((report) => report.id && report.location);
+
+      for (const report of uniqueReports) {
+        if (cancelled) return;
+        if (!report.id) continue;
+
+        const existing = locationLabels[report.id];
+        // Re-resolve overly generic city-only labels from older lookups.
+        const isTooGeneric =
+          !!existing &&
+          /^near [^,(]+ \(\d/.test(existing) &&
+          !/,/.test(existing) &&
+          !/\b(road|street|nagar|colony|market|subway|lane|avenue|marg|hospital|clinic)\b/i.test(existing);
+
+        if (existing && !existing.includes("unknown area") && !isTooGeneric) {
+          continue;
+        }
+
+        try {
+          const label = await resolveNearLocationLabel({
+            lat: report.location.lat,
+            lng: report.location.lng,
+            existingAddress: report.location.address,
+          });
+
+          if (cancelled) return;
+          setLocationLabels((prev) => ({ ...prev, [report.id!]: label }));
+        } catch (error) {
+          console.warn("Location label resolve failed:", error);
+          if (cancelled) return;
+          const coords = `${report.location.lat.toFixed(3)}, ${report.location.lng.toFixed(3)}`;
+          setLocationLabels((prev) => ({
+            ...prev,
+            [report.id!]: `near unknown area (${coords})`,
+          }));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    };
+
+    void resolveLabels();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports]);
+
+  const getReportLocationLabel = (report: Report): string => {
+    if (report.id && locationLabels[report.id]) {
+      return locationLabels[report.id];
+    }
+    const coords = `${report.location.lat.toFixed(3)}, ${report.location.lng.toFixed(3)}`;
+    if (
+      report.location.address &&
+      !/^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$/.test(report.location.address)
+    ) {
+      const short = report.location.address.split(",").slice(0, 2).join(",").trim();
+      return `near ${short} (${coords})`;
+    }
+    return `Resolving location… (${coords})`;
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "pending": return <Clock className="h-4 w-4" />;
@@ -70,16 +217,91 @@ const AdminDashboard = () => {
     }
   };
 
-  // Emergency services integration using local database
-  const findNearestAuthorities = async (issueType: string, location: { lat: number, lng: number }, severity: number) => {
+  const buildAgentDispatchPayload = (
+    dispatch: Awaited<ReturnType<typeof runAgenticAutoDispatch>>
+  ) => ({
+    triggered: dispatch.triggered,
+    reason: dispatch.reason,
+    ...(dispatch.authority?.name ? { authorityName: dispatch.authority.name } : {}),
+    ...(dispatch.authority?.phone ? { authorityPhone: dispatch.authority.phone } : {}),
+    ...(dispatch.authority?.email ? { authorityEmail: dispatch.authority.email } : {}),
+    ...(typeof dispatch.authority?.distanceKm === 'number'
+      ? { distanceKm: dispatch.authority.distanceKm }
+      : {}),
+    emailOpened: dispatch.actions.emailOpened,
+    emailSubmitted: dispatch.actions.emailSubmitted,
+    callOpened: dispatch.actions.callOpened,
+    ...(dispatch.actions.callNumber ? { callNumber: dispatch.actions.callNumber } : {}),
+    ...(dispatch.messagePreview ? { messagePreview: dispatch.messagePreview } : {}),
+    createdAt: dispatch.createdAt,
+  });
+
+  const dispatchEliteReport = async (
+    incident: Report,
+    options?: { silent?: boolean }
+  ): Promise<Report | null> => {
+    if (!incident.id) return null;
+
+    const score = Number(incident.userScore || 0);
+    const severity = getIncidentSeverity(incident);
+    if (!shouldAutoEscalate(score, severity)) {
+      toast({
+        title: "Not eligible for auto-dispatch",
+        description: `Needs Elite score ≥ 100 (has ${score}) and severity 5 (has ${severity}).`,
+        variant: "destructive",
+      });
+      return null;
+    }
+
+    const dispatch = await runAgenticAutoDispatch({
+      incidentId: incident.id,
+      userScore: score,
+      userName: incident.userName || 'Citizen',
+      userEmail: incident.userEmail || 'unknown@email.com',
+      description: incident.description,
+      category: incident.aiAnalysis?.category || 'Other',
+      severity,
+      location: {
+        lat: incident.location.lat,
+        lng: incident.location.lng,
+      },
+      silent: options?.silent ?? false,
+    });
+
+    if (!dispatch.triggered) {
+      toast({
+        title: "Auto-dispatch skipped",
+        description: dispatch.reason,
+        variant: "destructive",
+      });
+      return null;
+    }
+
+    const agentDispatch = buildAgentDispatchPayload(dispatch);
+    await saveAgentDispatchResult(incident.id, agentDispatch);
+
+    return {
+      ...incident,
+      agentDispatch,
+      status: 'in-progress' as const,
+      notes: `Agent auto-dispatched to ${dispatch.authority?.name || 'nearest authority'} (no admin action required).`,
+    };
+  };
+
+  // Free nearest-authority lookup via OpenStreetMap Overpass
+  const findNearestAuthorities = async (
+    issueType: string,
+    location: { lat: number, lng: number },
+    severity: number,
+    description: string = ""
+  ) => {
     try {
-      console.log('Finding nearest authorities using local database...');
-      
-      // Get emergency services from local database
-      const realServices = await findRealEmergencyServices(location, issueType, severity);
-      
+      console.log('Finding nearest authorities via OpenStreetMap...');
+
+      const realServices = await findRealEmergencyServices(location, issueType, severity, description);
+
       if (realServices.length > 0) {
-        console.log(`Found ${realServices.length} services from local database`);
+        console.log(`Found ${realServices.length} nearby authorities from OpenStreetMap`);
         return realServices;
       }
       
@@ -122,7 +344,7 @@ const AdminDashboard = () => {
       
       toast({
         title: "Status Updated",
-        description: `Report ${reportId} has been ${newStatus}.`,
+        description: `Report has been ${newStatus}.`,
       });
 
 
@@ -147,42 +369,62 @@ const AdminDashboard = () => {
       getIncidentSeverity(report).toString() === severityFilter;
     const matchesStatus = statusFilter === "all" || report.status === statusFilter;
     
-    // Priority filtering
+    // Priority filtering (badge from users profile, score as fallback)
+    const score = Number(report.userScore || 0);
+    const isElite = report.userBadge === '🏆 Elite Citizen' || score >= 100;
+    const isGold = report.userBadge === '⭐ Gold Citizen' || score >= 75;
     let matchesPriority = true;
     if (priorityFilter === "elite") {
-      matchesPriority = report.userBadge === '🏆 Elite Citizen';
+      matchesPriority = isElite;
     } else if (priorityFilter === "gold") {
-      matchesPriority = report.userBadge === '🏆 Elite Citizen' || report.userBadge === '⭐ Gold Citizen';
+      matchesPriority = isElite || isGold;
     } else if (priorityFilter === "high") {
-      matchesPriority = report.userBadge === '🏆 Elite Citizen' || report.userBadge === '⭐ Gold Citizen' || 
-                       getIncidentSeverity(report) >= 4;
+      matchesPriority = isElite || isGold || getIncidentSeverity(report) >= 4;
     }
     
     return matchesSearch && matchesSeverity && matchesStatus && matchesPriority;
   }).sort((a, b) => {
-    // Priority sorting: Elite citizens first, then by severity, then by date
+    // Active work first; resolved/rejected sink to the bottom
+    const statusRank = (status?: string) => {
+      switch (status) {
+        case "pending":
+          return 0;
+        case "in-progress":
+          return 1;
+        case "resolved":
+          return 2;
+        case "rejected":
+          return 3;
+        default:
+          return 4;
+      }
+    };
+
+    const statusDiff = statusRank(a.status) - statusRank(b.status);
+    if (statusDiff !== 0) return statusDiff;
+
+    // Within the same status: Elite citizens first, then severity, then date
     const getPriorityScore = (report: Report) => {
       let score = 0;
-      
-      // Elite citizens get highest priority
-      if (report.userBadge === '🏆 Elite Citizen') score += 1000;
-      else if (report.userBadge === '⭐ Gold Citizen') score += 500;
-      else if (report.userBadge === '🥉 Silver Citizen') score += 200;
-      else if (report.userBadge === '🥉 Bronze Citizen') score += 100;
-      else if (report.userBadge === '👤 New Citizen') score += 50;
-              else if (report.userBadge === '🚫 Suspended Citizen') score += 0;
-      
-      // Add severity bonus (higher severity = higher priority)
+
+      if (report.userBadge === "🏆 Elite Citizen") score += 1000;
+      else if (report.userBadge === "⭐ Gold Citizen") score += 500;
+      else if (report.userBadge === "🥉 Silver Citizen") score += 200;
+      else if (report.userBadge === "🥉 Bronze Citizen") score += 100;
+      else if (report.userBadge === "👤 New Citizen") score += 50;
+      else if (report.userBadge === "🚫 Suspended Citizen") score += 0;
+
       score += getIncidentSeverity(report) * 10;
-      
-      // Add recency bonus (newer reports get slight priority)
-      const daysOld = report.createdAt ? (Date.now() - report.createdAt.toDate().getTime()) / (1000 * 60 * 60 * 24) : 0;
-      score += Math.max(0, 30 - daysOld); // Reports older than 30 days get no bonus
-      
+
+      const daysOld = report.createdAt
+        ? (Date.now() - report.createdAt.toDate().getTime()) / (1000 * 60 * 60 * 24)
+        : 0;
+      score += Math.max(0, 30 - daysOld);
+
       return score;
     };
-    
-    return getPriorityScore(b) - getPriorityScore(a); // Sort descending (highest priority first)
+
+    return getPriorityScore(b) - getPriorityScore(a);
   });
 
   const stats = {
@@ -349,6 +591,15 @@ const AdminDashboard = () => {
                       <p>Reports: {user.totalReports}</p>
                       <p>Accepted: {user.acceptedReports}</p>
                       <p>Rejected: {user.rejectedReports}</p>
+                      <p>
+                        Open:{' '}
+                        {Math.max(
+                          0,
+                          Number(user.totalReports || 0) -
+                            Number(user.acceptedReports || 0) -
+                            Number(user.rejectedReports || 0)
+                        )}
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -413,31 +664,31 @@ const AdminDashboard = () => {
               </div>
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <Table>
+          <CardContent className="overflow-hidden">
+            <div className="w-full max-w-full overflow-x-auto">
+            <Table className="min-w-full table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Priority</TableHead>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Summary</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Severity</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reporter</TableHead>
-                  <TableHead>Actions</TableHead>
+                  <TableHead className="w-[90px]">Priority</TableHead>
+                  <TableHead className="w-[18%]">Summary</TableHead>
+                  <TableHead className="w-[110px]">Category</TableHead>
+                  <TableHead className="w-[80px]">Severity</TableHead>
+                  <TableHead className="w-[22%]">Location</TableHead>
+                  <TableHead className="w-[90px]">Date</TableHead>
+                  <TableHead className="w-[110px]">Status</TableHead>
+                  <TableHead className="w-[100px]">Reporter</TableHead>
+                  <TableHead className="w-[160px] sticky right-0 bg-card z-10 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.35)]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredReports.map((report) => (
                   <TableRow key={report.id} className="hover:bg-muted/50">
                     <TableCell className="whitespace-nowrap">
-                      {report.userBadge === '🏆 Elite Citizen' ? (
+                      {report.userBadge === '🏆 Elite Citizen' || Number(report.userScore || 0) >= 100 ? (
                         <Badge className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-yellow-900 text-xs px-2 py-1 font-bold">
                           🏆 HIGH
                         </Badge>
-                      ) : report.userBadge === '⭐ Gold Citizen' ? (
+                      ) : report.userBadge === '⭐ Gold Citizen' || Number(report.userScore || 0) >= 75 ? (
                         <Badge className="bg-gradient-to-r from-yellow-500 to-yellow-700 text-white text-xs px-2 py-1">
                           ⭐ MEDIUM
                         </Badge>
@@ -447,8 +698,9 @@ const AdminDashboard = () => {
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="font-mono text-xs whitespace-nowrap">{report.id?.substring(0, 8)}...</TableCell>
-                    <TableCell className="max-w-[200px] truncate text-sm">{report.description}</TableCell>
+                    <TableCell className="max-w-0 truncate text-sm" title={report.description}>
+                      {report.description}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap">
                       <Badge variant="outline" className="text-xs px-2 py-1">
                         {report.aiAnalysis?.category || 'Unknown'}
@@ -459,8 +711,11 @@ const AdminDashboard = () => {
                         {getIncidentSeverity(report)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-                      {report.location.address || `${report.location.lat.toFixed(3)}, ${report.location.lng.toFixed(3)}`}
+                    <TableCell
+                      className="text-muted-foreground text-xs max-w-0 truncate"
+                      title={getReportLocationLabel(report)}
+                    >
+                      {getReportLocationLabel(report)}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
                       {report.createdAt?.toDate().toLocaleDateString('en-GB') || 'N/A'}
@@ -470,14 +725,55 @@ const AdminDashboard = () => {
                         {getStatusIcon(report.status || 'pending')}
                         <span className="capitalize text-xs">{report.status || 'pending'}</span>
                       </div>
+                      {report.agentDispatch?.triggered && (
+                        <Badge className="mt-1 bg-red-600 text-white text-[10px]">
+                          Auto-dispatched
+                        </Badge>
+                      )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs whitespace-nowrap max-w-[100px] truncate">
+                    <TableCell className="text-muted-foreground text-xs max-w-0 truncate" title={report.userName || 'Anonymous'}>
                       {report.userName || 'Anonymous'}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      <div className="flex space-x-1">
+                    <TableCell className="whitespace-nowrap sticky right-0 bg-card z-10 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.35)]">
+                      <div className="flex flex-wrap gap-1">
                         {report.status === "pending" && (
                           <>
+                            {shouldAutoEscalate(Number(report.userScore || 0), getIncidentSeverity(report)) &&
+                              !report.agentDispatch?.triggered && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs bg-red-600/20 border-red-500/50 text-red-400 hover:bg-red-600/30"
+                                onClick={async () => {
+                                  try {
+                                    const updated = await dispatchEliteReport(report, { silent: false });
+                                    if (updated) {
+                                      setReports((prev) =>
+                                        prev.map((item) =>
+                                          item.id === updated.id ? updated : item
+                                        )
+                                      );
+                                      toast({
+                                        title: "Agent Auto-Dispatched",
+                                        description: updated.notes || "Authorities notified.",
+                                      });
+                                    }
+                                  } catch (error) {
+                                    console.error('Manual auto-dispatch failed:', error);
+                                    toast({
+                                      title: "Auto-dispatch failed",
+                                      description:
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Could not dispatch this report.",
+                                      variant: "destructive",
+                                    });
+                                  }
+                                }}
+                              >
+                                Dispatch Now
+                              </Button>
+                            )}
                             <Button 
                               size="sm" 
                               variant="outline"
@@ -488,7 +784,8 @@ const AdminDashboard = () => {
                                   const authorities = await findNearestAuthorities(
                                     report.aiAnalysis?.category || 'Other',
                                     report.location,
-                                    report.aiAnalysis?.severity || 1
+                                    report.aiAnalysis?.severity || 1,
+                                    report.description || report.aiAnalysis?.summary || ''
                                   );
                                   
                                   if (authorities.length > 0) {
@@ -607,6 +904,7 @@ const AdminDashboard = () => {
                 ))}
               </TableBody>
             </Table>
+            </div>
           </CardContent>
         </Card>
       </main>
@@ -676,7 +974,7 @@ const AdminDashboard = () => {
                 <div>
                   <span className="text-slate-400">Location:</span>
                   <span className="ml-2 font-medium text-white">
-                    {currentIncident.location.address || `${currentIncident.location.lat.toFixed(4)}, ${currentIncident.location.lng.toFixed(4)}`}
+                    {getReportLocationLabel(currentIncident)}
                   </span>
                 </div>
                 <div>
@@ -686,6 +984,20 @@ const AdminDashboard = () => {
                   </span>
                 </div>
               </div>
+              {currentIncident.agentDispatch?.triggered && (
+                <div className="mt-3 rounded-md border border-red-500/40 bg-red-950/40 p-3 text-sm text-red-100">
+                  <p className="font-semibold">Agent auto-dispatched (no admin action required)</p>
+                  <p className="mt-1">
+                    Authority: {currentIncident.agentDispatch.authorityName || 'Nearest emergency authority'}
+                    {currentIncident.agentDispatch.callNumber
+                      ? ` • Call: ${currentIncident.agentDispatch.callNumber}`
+                      : ''}
+                  </p>
+                  {currentIncident.agentDispatch.authorityEmail && (
+                    <p className="mt-1">Email: {currentIncident.agentDispatch.authorityEmail}</p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Authorities List */}
@@ -798,10 +1110,35 @@ const AdminDashboard = () => {
                       size="sm"
                       className="bg-blue-600 hover:bg-blue-700 text-white text-xs flex-1"
                       onClick={() => {
-                        // In real implementation, this would initiate a call or send notification
+                        const rawCandidates = [
+                          authority.phone,
+                          authority.emergencyPhone,
+                          "112",
+                        ];
+                        const dialNumber = rawCandidates
+                          .map((value) => (value || "").trim())
+                          .find((value) => value && value.toUpperCase() !== "N/A" && /[\d+]/.test(value));
+
+                        if (!dialNumber) {
+                          toast({
+                            title: "No phone number available",
+                            description: "This authority has no dialable number in OpenStreetMap data.",
+                            variant: "destructive",
+                          });
+                          return;
+                        }
+
+                        const sanitized = dialNumber.replace(/[^\d+]/g);
+                        const anchor = document.createElement("a");
+                        anchor.href = `tel:${sanitized}`;
+                        anchor.rel = "noopener noreferrer";
+                        document.body.appendChild(anchor);
+                        anchor.click();
+                        anchor.remove();
+
                         toast({
-                          title: "📞 Contacting Authority",
-                          description: `Initiating contact with ${authority.name}...`,
+                          title: "Calling authority",
+                          description: `Dialing ${authority.name} at ${sanitized}`,
                         });
                       }}
                     >
@@ -812,16 +1149,34 @@ const AdminDashboard = () => {
                       size="sm"
                       variant="outline"
                       className="text-xs border-slate-600 text-slate-300 hover:bg-slate-600 hover:text-white"
-                      onClick={() => {
-                        // Copy contact details to clipboard
-                        const contactInfo = authority.emergencyPhone 
-                          ? `${authority.name}: ${authority.phone} (Emergency: ${authority.emergencyPhone})`
-                          : `${authority.name}: ${authority.phone}`;
-                        navigator.clipboard.writeText(contactInfo);
-                        toast({
-                          title: "📋 Contact Details Copied",
-                          description: "Contact information copied to clipboard",
-                        });
+                      onClick={async () => {
+                        const dialable =
+                          authority.phone && authority.phone.toUpperCase() !== "N/A"
+                            ? authority.phone
+                            : authority.emergencyPhone || "N/A";
+                        const contactInfo = [
+                          authority.name,
+                          `Phone: ${dialable}`,
+                          authority.emergencyPhone ? `Emergency: ${authority.emergencyPhone}` : null,
+                          authority.address ? `Address: ${authority.address}` : null,
+                          `Distance: ${authority.distance} km`,
+                        ]
+                          .filter(Boolean)
+                          .join("\n");
+
+                        try {
+                          await navigator.clipboard.writeText(contactInfo);
+                          toast({
+                            title: "Contact details copied",
+                            description: "Authority information copied to clipboard",
+                          });
+                        } catch {
+                          toast({
+                            title: "Copy failed",
+                            description: "Could not copy to clipboard on this browser.",
+                            variant: "destructive",
+                          });
+                        }
                       }}
                     >
                       📋 Copy Details

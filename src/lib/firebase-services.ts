@@ -44,6 +44,24 @@ export interface Incident {
   adminNotes?: string;
   statusChangedAt?: Timestamp;
   statusChangedBy?: string;
+  /** Reporter reputation for admin priority UI */
+  userBadge?: string;
+  userScore?: number;
+  /** Agentic auto-dispatch metadata for trusted high-severity reports */
+  agentDispatch?: {
+    triggered: boolean;
+    reason: string;
+    authorityName?: string;
+    authorityPhone?: string;
+    authorityEmail?: string;
+    distanceKm?: number;
+    emailOpened?: boolean;
+    emailSubmitted?: boolean;
+    callOpened?: boolean;
+    callNumber?: string;
+    messagePreview?: string;
+    createdAt?: string;
+  };
 }
 
 export interface UserProfile {
@@ -64,7 +82,7 @@ export interface UserProfile {
 export interface Notification {
   id?: string;
   userId: string;
-  type: 'incident_accepted' | 'incident_rejected' | 'incident_created' | 'incident_in_progress' | 'incident_pending' | 'points_earned' | 'badge_earned' | 'admin_recommendation';
+  type: 'incident_accepted' | 'incident_rejected' | 'incident_created' | 'incident_in_progress' | 'incident_pending' | 'points_earned' | 'badge_earned' | 'admin_recommendation' | 'agent_auto_dispatch';
   title: string;
   message: string;
   incidentId?: string;
@@ -273,6 +291,46 @@ export const addIncident = async (
   }
 };
 
+export const saveAgentDispatchResult = async (
+  incidentId: string,
+  dispatch: NonNullable<Incident['agentDispatch']>
+): Promise<void> => {
+  const incidentRef = doc(db, 'incidents', incidentId);
+
+  // Firestore rejects undefined values — only write defined fields
+  const cleanedDispatch = Object.fromEntries(
+    Object.entries(dispatch).filter(([, value]) => value !== undefined)
+  ) as NonNullable<Incident['agentDispatch']>;
+
+  const updateData: Record<string, unknown> = {
+    agentDispatch: cleanedDispatch,
+    status: cleanedDispatch.triggered ? 'in-progress' : 'pending',
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cleanedDispatch.triggered) {
+    updateData.notes = `Agent auto-dispatched to ${cleanedDispatch.authorityName || 'nearest authority'} (no admin action required).`;
+  }
+
+  await updateDoc(incidentRef, updateData);
+
+  if (cleanedDispatch.triggered) {
+    try {
+      await addDoc(collection(db, 'notifications'), {
+        userId: 'admin',
+        type: 'agent_auto_dispatch',
+        title: 'Agent Auto-Dispatch Triggered 🚨',
+        message: `Trusted citizen severity-5 report ${incidentId} was auto-sent to ${cleanedDispatch.authorityName || 'emergency authorities'}.`,
+        incidentId,
+        isRead: false,
+        createdAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.warn('Could not create admin auto-dispatch notification:', error);
+    }
+  }
+};
+
 // Helper function to determine priority based on severity
 const getPriorityFromSeverity = (severity: number): 'low' | 'medium' | 'high' | 'critical' => {
   if (severity >= 5) return 'critical';
@@ -292,20 +350,48 @@ export const getAllIncidents = async (): Promise<Incident[]> => {
     const querySnapshot = await getDocs(q);
     const incidents: Incident[] = [];
     
-    querySnapshot.forEach((doc) => {
-      const incidentData = doc.data();
-      console.log('firebase-services: Retrieved incident data:', incidentData);
-      console.log('firebase-services: Incident AI analysis:', incidentData.aiAnalysis);
-      console.log('firebase-services: Incident severity:', incidentData.aiAnalysis?.severity);
-      console.log('firebase-services: Incident severity type:', typeof incidentData.aiAnalysis?.severity);
-      
+    querySnapshot.forEach((docSnap) => {
+      const incidentData = docSnap.data();
       incidents.push({
-        id: doc.id,
+        id: docSnap.id,
         ...incidentData
-      } as any);
+      } as Incident);
     });
-    
-    return incidents;
+
+    // Attach latest reporter badge/score so Priority column stays accurate
+    const uniqueUserIds = [...new Set(incidents.map((incident) => incident.userId).filter(Boolean))];
+    const userMeta = new Map<string, { badge?: string; score?: number }>();
+
+    await Promise.all(
+      uniqueUserIds.map(async (userId) => {
+        try {
+          const userSnap = await getDoc(doc(db, 'users', userId));
+          if (userSnap.exists()) {
+            const data = userSnap.data() as UserProfile;
+            userMeta.set(userId, {
+              badge: data.badge,
+              score: data.score,
+            });
+          }
+        } catch (error) {
+          console.warn('Could not load reporter profile for priority:', userId, error);
+        }
+      })
+    );
+
+    return incidents.map((incident) => {
+      const meta = userMeta.get(incident.userId);
+      const score = Number(meta?.score ?? incident.userScore ?? 0);
+      const derived = getBadgeFromScore(score);
+      // Prefer score-derived badge so Priority stays correct even if users.badge is stale
+      const badge = derived.badge;
+
+      return {
+        ...incident,
+        userBadge: badge,
+        userScore: score,
+      };
+    });
   } catch (error) {
     console.error('Error getting incidents:', error);
     throw error;
@@ -492,11 +578,10 @@ const handleIncidentAccepted = async (userId: string, incidentId: string, descri
   try {
     const userRef = doc(db, 'users', userId);
     
-    // Update user score (+10 points)
+    // Update user score (+10 points). totalReports is set only on create — don't double-count here.
     await updateDoc(userRef, {
       score: increment(10),
       acceptedReports: increment(1),
-      totalReports: increment(1),
       updatedAt: serverTimestamp()
     });
 
@@ -526,11 +611,10 @@ const handleIncidentRejected = async (userId: string, incidentId: string, descri
   try {
     const userRef = doc(db, 'users', userId);
     
-    // Update user score (-20 points)
+    // Update user score (-20 points). totalReports is set only on create — don't double-count here.
     await updateDoc(userRef, {
       score: increment(-20),
       rejectedReports: increment(1),
-      totalReports: increment(1),
       updatedAt: serverTimestamp()
     });
 
@@ -595,8 +679,19 @@ const handleIncidentPending = async (userId: string, incidentId: string, descrip
   }
 };
 
+/** Derive citizen badge + recommendation flag from score */
+export const getBadgeFromScore = (score: number): { badge: string; isRecommended: boolean } => {
+  if (score >= 100) return { badge: '🏆 Elite Citizen', isRecommended: true };
+  if (score >= 75) return { badge: '⭐ Gold Citizen', isRecommended: true };
+  if (score >= 50) return { badge: '🥉 Silver Citizen', isRecommended: false };
+  if (score >= 25) return { badge: '🥉 Bronze Citizen', isRecommended: false };
+  if (score >= 0) return { badge: '👤 New Citizen', isRecommended: false };
+  if (score >= -80) return { badge: '⚠️ Warning Citizen', isRecommended: false };
+  return { badge: '🚫 Suspended Citizen', isRecommended: false };
+};
+
 // Check and update user badge based on score
-const checkAndUpdateBadge = async (userId: string) => {
+export const checkAndUpdateBadge = async (userId: string) => {
   try {
     const userRef = doc(db, 'users', userId);
     const userDoc = await getDocs(query(collection(db, 'users'), where('__name__', '==', userId)));
@@ -604,52 +699,28 @@ const checkAndUpdateBadge = async (userId: string) => {
     
     if (!userData) return;
 
-    let newBadge = userData.badge;
-    let isRecommended = userData.isRecommended || false; // Default to false if undefined
-
-    // Badge system based on score with warning at <0 and suspension at -80
-    if (userData.score >= 100) {
-      newBadge = '🏆 Elite Citizen';
-      isRecommended = true;
-    } else if (userData.score >= 75) {
-      newBadge = '⭐ Gold Citizen';
-      isRecommended = true;
-    } else if (userData.score >= 50) {
-      newBadge = '🥉 Silver Citizen';
-      isRecommended = false;
-    } else if (userData.score >= 25) {
-      newBadge = '🥉 Bronze Citizen';
-      isRecommended = false;
-    } else if (userData.score >= 0) {
-      newBadge = '👤 New Citizen';
-      isRecommended = false;
-    } else if (userData.score < 0 && userData.score >= -80) {
-      newBadge = '⚠️ Warning Citizen';
-      isRecommended = false;
-    } else {
-      // Score below -80: Automatic suspension
-      newBadge = '🚫 Suspended Citizen';
-      isRecommended = false;
-    }
+    const { badge: newBadge, isRecommended } = getBadgeFromScore(Number(userData.score || 0));
 
     // Update badge if changed
-    if (newBadge !== userData.badge) {
+    if (newBadge !== userData.badge || isRecommended !== (userData.isRecommended || false)) {
       await updateDoc(userRef, {
         badge: newBadge,
-        isRecommended: isRecommended,
+        isRecommended,
         updatedAt: serverTimestamp()
       });
 
-      // Send badge notification
-      await addDoc(collection(db, 'notifications'), {
-        userId,
-        type: 'badge_earned',
-        title: 'New Badge Earned! 🏅',
-        message: `Congratulations! You've earned the "${newBadge}" badge!`,
-        badge: newBadge,
-        isRead: false,
-        createdAt: serverTimestamp()
-      });
+      if (newBadge !== userData.badge) {
+        // Send badge notification
+        await addDoc(collection(db, 'notifications'), {
+          userId,
+          type: 'badge_earned',
+          title: 'New Badge Earned! 🏅',
+          message: `Congratulations! You've earned the "${newBadge}" badge!`,
+          badge: newBadge,
+          isRead: false,
+          createdAt: serverTimestamp()
+        });
+      }
     }
   } catch (error) {
     console.error('Error updating badge:', error);
@@ -795,27 +866,39 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
     const userData = userDoc.docs[0]?.data() as UserProfile;
     
     if (userData) {
-      // Recalculate totalReports if it seems incorrect
-      if (userData.totalReports === undefined || userData.totalReports < 0) {
+      // Always reconcile report counters with real incidents
+      try {
+        const stats = await syncUserReportStats(userId);
+        userData.totalReports = stats.totalReports;
+        userData.acceptedReports = stats.acceptedReports;
+        userData.rejectedReports = stats.rejectedReports;
+      } catch (syncError) {
+        console.warn('Could not sync user report stats:', syncError);
         try {
-          const incidentsQuery = query(
-            collection(db, 'incidents'),
-            where('userId', '==', userId)
-          );
-          const incidentsSnapshot = await getDocs(incidentsQuery);
-          const actualTotalReports = incidentsSnapshot.size;
-          
-          // Update the user profile with correct count
-          const userRef = doc(db, 'users', userId);
-          await updateDoc(userRef, {
-            totalReports: actualTotalReports,
+          const stats = await getUserReportStats(userId);
+          userData.totalReports = stats.totalReports;
+          userData.acceptedReports = stats.acceptedReports;
+          userData.rejectedReports = stats.rejectedReports;
+        } catch {
+          // keep stored values
+        }
+      }
+
+      // Keep badge in sync with current score (e.g. 100 → Elite)
+      const { badge, isRecommended } = getBadgeFromScore(Number(userData.score || 0));
+      if (badge !== userData.badge || isRecommended !== (userData.isRecommended || false)) {
+        try {
+          await updateDoc(doc(db, 'users', userId), {
+            badge,
+            isRecommended,
             updatedAt: serverTimestamp()
           });
-          
-          userData.totalReports = actualTotalReports;
-          console.log(`Updated user ${userId} totalReports from ${userData.totalReports} to ${actualTotalReports}`);
-        } catch (updateError) {
-          console.error('Error updating user totalReports:', updateError);
+          userData.badge = badge;
+          userData.isRecommended = isRecommended;
+        } catch (badgeError) {
+          console.error('Error syncing user badge:', badgeError);
+          userData.badge = badge;
+          userData.isRecommended = isRecommended;
         }
       }
       
@@ -896,43 +979,78 @@ export const markNotificationAsRead = async (notificationId: string): Promise<vo
   }
 };
 
-// Sync all users' totalReports counts with actual incident counts
+/** Count reports from actual incidents (source of truth). */
+export const getUserReportStats = async (
+  userId: string
+): Promise<{ totalReports: number; acceptedReports: number; rejectedReports: number }> => {
+  const incidentsSnapshot = await getDocs(
+    query(collection(db, 'incidents'), where('userId', '==', userId))
+  );
+
+  let acceptedReports = 0;
+  let rejectedReports = 0;
+
+  incidentsSnapshot.forEach((incidentDoc) => {
+    const status = incidentDoc.data().status;
+    if (status === 'resolved') acceptedReports += 1;
+    else if (status === 'rejected') rejectedReports += 1;
+  });
+
+  return {
+    totalReports: incidentsSnapshot.size,
+    acceptedReports,
+    rejectedReports,
+  };
+};
+
+/** Persist report counters from incidents so UI doesn't show inflated totals. */
+export const syncUserReportStats = async (userId: string): Promise<{
+  totalReports: number;
+  acceptedReports: number;
+  rejectedReports: number;
+}> => {
+  const stats = await getUserReportStats(userId);
+  await updateDoc(doc(db, 'users', userId), {
+    ...stats,
+    updatedAt: serverTimestamp(),
+  });
+  return stats;
+};
+
+// Sync all users' report counts with actual incident data
 export const syncAllUsersTotalReports = async (): Promise<void> => {
   try {
-    console.log('Starting to sync all users totalReports...');
+    console.log('Starting to sync all users report stats...');
     
-    // Get all users
-    const usersQuery = query(collection(db, 'users'));
-    const usersSnapshot = await getDocs(usersQuery);
-    
+    const usersSnapshot = await getDocs(query(collection(db, 'users')));
     let updatedCount = 0;
     
     for (const userDoc of usersSnapshot.docs) {
       const userData = userDoc.data() as UserProfile;
       const userId = userDoc.id;
+      const stats = await getUserReportStats(userId);
       
-      // Get actual incident count for this user
-      const incidentsQuery = query(
-        collection(db, 'incidents'),
-        where('userId', '==', userId)
-      );
-      const incidentsSnapshot = await getDocs(incidentsQuery);
-      const actualTotalReports = incidentsSnapshot.size;
-      
-      // Update if count is different
-      if (userData.totalReports !== actualTotalReports) {
+      if (
+        userData.totalReports !== stats.totalReports ||
+        userData.acceptedReports !== stats.acceptedReports ||
+        userData.rejectedReports !== stats.rejectedReports
+      ) {
         await updateDoc(doc(db, 'users', userId), {
-          totalReports: actualTotalReports,
+          ...stats,
           updatedAt: serverTimestamp()
         });
         updatedCount++;
-        console.log(`Updated user ${userId}: ${userData.totalReports} → ${actualTotalReports}`);
+        console.log(
+          `Updated user ${userId}: total ${userData.totalReports}→${stats.totalReports}, ` +
+            `accepted ${userData.acceptedReports}→${stats.acceptedReports}, ` +
+            `rejected ${userData.rejectedReports}→${stats.rejectedReports}`
+        );
       }
     }
     
     console.log(`Sync complete! Updated ${updatedCount} users.`);
   } catch (error) {
-    console.error('Error syncing users totalReports:', error);
+    console.error('Error syncing users report stats:', error);
     throw error;
   }
 };
@@ -949,16 +1067,35 @@ export const getRecommendedUsers = async (): Promise<UserProfile[]> => {
     const querySnapshot = await getDocs(q);
     const users: UserProfile[] = [];
     
-    querySnapshot.forEach((doc) => {
-      const userData = doc.data() as any;
+    for (const userDoc of querySnapshot.docs) {
+      const userData = userDoc.data() as any;
       // Only include users with role 'user'
-      if (userData.role === 'user') {
-        users.push({
-          id: doc.id,
-          ...userData
-        });
+      if (userData.role !== 'user') continue;
+
+      let stats = {
+        totalReports: Number(userData.totalReports || 0),
+        acceptedReports: Number(userData.acceptedReports || 0),
+        rejectedReports: Number(userData.rejectedReports || 0),
+      };
+
+      // Always reconcile with real incidents (fixes historical double-counting)
+      try {
+        stats = await syncUserReportStats(userDoc.id);
+      } catch (syncError) {
+        console.warn('Could not sync report stats for recommended user:', userDoc.id, syncError);
+        try {
+          stats = await getUserReportStats(userDoc.id);
+        } catch {
+          // keep stored counters
+        }
       }
-    });
+
+      users.push({
+        id: userDoc.id,
+        ...userData,
+        ...stats,
+      });
+    }
     
     // Sort by score in memory to avoid composite index requirement
     users.sort((a, b) => (b.score || 0) - (a.score || 0));

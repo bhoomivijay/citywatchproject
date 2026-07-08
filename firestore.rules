@@ -1,35 +1,38 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow authenticated users to read incidents
-    match /incidents/{incidentId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null && 
-        (request.auth.token.admin == true || 
-         resource.data.reporter == request.auth.token.email);
+    function isSignedIn() {
+      return request.auth != null;
     }
-    
-    // Allow admin users to update incident status
-    match /incidents/{incidentId} {
-      allow update: if request.auth != null && 
-        request.auth.token.admin == true;
+
+    function isAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
-    
-    // Allow authenticated users to access notifications
+
+    function isIncidentOwner() {
+      return isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /incidents/{incidentId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      // Reporter can update own incident (e.g. agentDispatch after submit); admins can update any
+      allow update: if isSignedIn() && (isAdmin() || isIncidentOwner());
+    }
+
     match /notifications/{notificationId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isSignedIn();
     }
-    
-    // Allow authenticated users to access user profiles
+
     match /users/{userId} {
-      allow read, write: if request.auth != null && 
-        (request.auth.uid == userId || request.auth.token.admin == true);
+      allow read, write: if isSignedIn()
+        && (request.auth.uid == userId || isAdmin());
     }
-    
-    // Allow authenticated users to access all other collections
+
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isSignedIn();
     }
   }
 }

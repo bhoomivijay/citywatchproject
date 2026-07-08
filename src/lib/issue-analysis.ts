@@ -20,8 +20,38 @@ const CATEGORIES = [
   "Water Issue",
   "Public Unrest",
   "Infrastructure",
+  "Health",
+  "Safety",
+  "Environmental",
   "Other",
 ] as const;
+
+const CATEGORY_ALIASES: Record<string, (typeof CATEGORIES)[number]> = {
+  health: "Health",
+  medical: "Health",
+  "medical problem": "Health",
+  "medical emergency": "Health",
+  healthcare: "Health",
+  hospital: "Health",
+  injury: "Health",
+  accident: "Traffic",
+  safety: "Safety",
+  fire: "Safety",
+  environmental: "Environmental",
+  environment: "Environmental",
+  pollution: "Environmental",
+  garbage: "Environmental",
+  waste: "Environmental",
+};
+
+function normalizeCategory(raw: unknown): (typeof CATEGORIES)[number] {
+  const value = String(raw || "").trim();
+  if (CATEGORIES.includes(value as (typeof CATEGORIES)[number])) {
+    return value as (typeof CATEGORIES)[number];
+  }
+  const alias = CATEGORY_ALIASES[value.toLowerCase()];
+  return alias || "Other";
+}
 
 const GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"];
 const GROQ_MODEL = "llama-3.3-70b-versatile";
@@ -29,6 +59,10 @@ const GROQ_MODEL = "llama-3.3-70b-versatile";
 const SYSTEM_PROMPT = `You are PulseAI, a city management assistant. Analyze citizen reports and respond with JSON only.
 
 Categories (use exactly one): ${CATEGORIES.map((c) => `'${c}'`).join(", ")}
+Rules:
+- Injuries, eye/medical problems, hospitals, illness, trauma => 'Health'
+- Fire, gas leak, life safety hazard => 'Safety'
+- Pollution, garbage/waste dumping => 'Environmental'
 ${SEVERITY_AI_PROMPT}
 
 JSON shape: {"summary":"...","category":"...","severity":3}`;
@@ -39,7 +73,7 @@ function parseAnalysisJson(text: string, description: string): Omit<IssueAnalysi
 
   return {
     summary: String(aiData.summary || description.slice(0, 120)),
-    category: CATEGORIES.includes(aiData.category) ? aiData.category : "Other",
+    category: normalizeCategory(aiData.category),
     severity: Math.min(5, Math.max(1, Number(aiData.severity) || 3)),
   };
 }
@@ -50,11 +84,35 @@ export function analyzeIssueLocally(description: string): IssueAnalysis {
   let severity = 2;
 
   const rules: Array<{ category: (typeof CATEGORIES)[number]; keywords: string[] }> = [
+    {
+      category: "Health",
+      keywords: [
+        "eye",
+        "injury",
+        "injured",
+        "medical",
+        "hospital",
+        "ambulance",
+        "bleeding",
+        "fracture",
+        "burn",
+        "unconscious",
+        "heart",
+        "stroke",
+        "accident victim",
+        "pain",
+        "wound",
+        "clinic",
+        "doctor",
+      ],
+    },
+    { category: "Safety", keywords: ["fire", "explosion", "gas leak", "smoke", "collapse risk", "life threatening"] },
     { category: "Traffic", keywords: ["traffic", "accident", "collision", "pothole", "road", "parking", "signal", "jam"] },
     { category: "Power Outage", keywords: ["power", "electric", "electricity", "outage", "blackout", "streetlight", "street light", "wire"] },
     { category: "Water Issue", keywords: ["water", "leak", "flood", "flooding", "drain", "sewage", "pipe", "overflow"] },
     { category: "Public Unrest", keywords: ["protest", "fight", "crime", "theft", "violence", "disturbance", "unsafe"] },
-    { category: "Infrastructure", keywords: ["building", "bridge", "construction", "damage", "broken", "collapse", "tree", "garbage", "trash", "waste"] },
+    { category: "Environmental", keywords: ["pollution", "garbage", "trash", "waste", "dumping", "smell", "smoke pollution"] },
+    { category: "Infrastructure", keywords: ["building", "bridge", "construction", "damage", "broken", "collapse", "tree"] },
   ];
 
   for (const rule of rules) {
@@ -64,7 +122,7 @@ export function analyzeIssueLocally(description: string): IssueAnalysis {
     }
   }
 
-  if (/\b(fire|explosion|gas leak|medical emergency|life.?threatening)\b/.test(text)) severity = 5;
+  if (/\b(fire|explosion|gas leak|medical emergency|life.?threatening|eye injury|severe bleeding)\b/.test(text)) severity = 5;
   else if (/\b(emergency|urgent|critical|danger|injured|blocked road)\b/.test(text)) severity = 4;
   else if (/\b(major|serious|large|widespread|multiple)\b/.test(text)) severity = 3;
   else if (/\b(minor|small|slight)\b/.test(text)) severity = 1;

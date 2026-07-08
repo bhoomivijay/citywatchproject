@@ -20,6 +20,12 @@ export interface AuthUser {
   displayName: string | null;
   role: 'user' | 'admin';
   createdAt: Date;
+  score?: number;
+  badge?: string;
+  totalReports?: number;
+  acceptedReports?: number;
+  rejectedReports?: number;
+  isRecommended?: boolean;
 }
 
 export const AUTH_REDIRECT_PENDING_KEY = 'citywatch_auth_redirect_pending';

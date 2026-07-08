@@ -6,9 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { MapPin, Send, Sparkles, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { addIncident, isUserSuspended, isUserInWarningZone } from "@/lib/firebase-services";
+import { addIncident, isUserSuspended, isUserInWarningZone, saveAgentDispatchResult, getUserProfile } from "@/lib/firebase-services";
 import { analyzeIssue as runIssueAnalysis } from "@/lib/issue-analysis";
 import { getSeverityBadgeClass, getSeverityLabel } from "@/lib/severity";
+import { runAgenticAutoDispatch, shouldAutoEscalate } from "@/lib/agent-dispatch";
 import { useAuth } from "@/contexts/AuthContext";
 
 interface ReportIssueModalProps {
@@ -23,6 +24,7 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
   const [aiSummary, setAiSummary] = useState("");
   const [severity, setSeverity] = useState<number | undefined>(undefined);
   const [category, setCategory] = useState<string>("");
+  const [aiProvider, setAiProvider] = useState<string>("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSuspended, setIsSuspended] = useState(false);
   const [isInWarningZone, setIsInWarningZone] = useState(false);
@@ -91,10 +93,11 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
       setCategory(result.category);
       localStorage.setItem("current_ai_category", result.category);
 
-      const provider = result.source === "groq" ? "Groq AI" : result.source === "gemini" ? "Gemini AI" : "Local";
+      const provider = result.source === "groq" ? "Groq AI" : result.source === "gemini" ? "Gemini AI" : "Local AI";
+      setAiProvider(provider);
       toast({
-        title: "AI Analysis Complete",
-        description: `${provider}: ${result.category} - Severity ${result.severity}`,
+        title: "Analysis Complete",
+        description: `AI: ${result.category} — Severity ${result.severity}`,
       });
     } catch (error) {
       console.error("Error analyzing issue:", error);
@@ -190,30 +193,96 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
         console.error('Error in addIncident:', addError);
         throw new Error(`Failed to add incident: ${addError.message}`);
       }
-      
+
+      // Use latest Firestore score (auth session may be stale / missing score)
+      let reporterScore = Number((userData as { score?: number }).score || 0);
+      try {
+        const profile = await getUserProfile(userData.uid);
+        if (profile) {
+          reporterScore = Number(profile.score || 0);
+        }
+      } catch (profileError) {
+        console.warn('Could not refresh score for auto-dispatch:', profileError);
+      }
+
+      const shouldEscalate = shouldAutoEscalate(reporterScore, severity);
+      const submitDescription = description;
+      const submitCategory = category || "Other";
+      const submitSeverity = severity;
+      const submitLocation = {
+        lat: selectedLocation.lat,
+        lng: selectedLocation.lng,
+      };
+
+      // Reset + close immediately so the user never has to dismiss the modal manually.
+      setDescription("");
+      setAiSummary("");
+      setSeverity(undefined);
+      setCategory("");
+      setAiProvider("");
+      onClose();
+
       toast({
-        title: "Report Submitted Successfully!",
-        description: `Issue reported and saved to database. ID: ${incidentId}`,
+        title: shouldEscalate
+          ? "Emergency Auto-Dispatched!"
+          : "Report Submitted Successfully!",
+        description: shouldEscalate
+          ? "Trusted citizen severity-5 report was sent to nearest authorities automatically."
+          : "Your issue has been reported and submitted for review.",
       });
-      
-      // Notify parent component that incident was added
+
       if (onIncidentAdded) {
         onIncidentAdded(incidentId);
       }
-      
-      // Reset form
-      setDescription("");
-      setAiSummary("");
-      setSeverity(undefined); // Reset to undefined, not 1
-      setCategory("");
-      
-      console.log('ReportIssueModal: Closing modal after successful submission');
-      
-      // Close modal immediately
-      onClose();
-      
-      // Don't refresh the page - let the parent component handle updates
-      // The incidents list should update automatically via real-time listeners
+
+      // Run agent dispatch after close so mailto/tel can't keep the dialog open.
+      if (shouldEscalate) {
+        void (async () => {
+          try {
+            const dispatch = await runAgenticAutoDispatch({
+              incidentId,
+              userScore: reporterScore,
+              userName: userData.displayName || userData.email || "Citizen",
+              userEmail: userData.email || "unknown@email.com",
+              description: submitDescription,
+              category: submitCategory,
+              severity: submitSeverity,
+              location: submitLocation,
+            });
+
+            await saveAgentDispatchResult(incidentId, {
+              triggered: dispatch.triggered,
+              reason: dispatch.reason,
+              ...(dispatch.authority?.name ? { authorityName: dispatch.authority.name } : {}),
+              ...(dispatch.authority?.phone ? { authorityPhone: dispatch.authority.phone } : {}),
+              ...(dispatch.authority?.email ? { authorityEmail: dispatch.authority.email } : {}),
+              ...(typeof dispatch.authority?.distanceKm === "number"
+                ? { distanceKm: dispatch.authority.distanceKm }
+                : {}),
+              emailOpened: dispatch.actions.emailOpened,
+              emailSubmitted: dispatch.actions.emailSubmitted,
+              callOpened: dispatch.actions.callOpened,
+              ...(dispatch.actions.callNumber ? { callNumber: dispatch.actions.callNumber } : {}),
+              ...(dispatch.messagePreview ? { messagePreview: dispatch.messagePreview } : {}),
+              createdAt: dispatch.createdAt,
+            });
+
+            toast({
+              title: "Agent Auto-Dispatched Authorities",
+              description: dispatch.authority
+                ? `Nearest authority contacted: ${dispatch.authority.name}${dispatch.actions.callNumber ? ` (${dispatch.actions.callNumber})` : ""}`
+                : "Emergency auto-dispatch triggered.",
+            });
+          } catch (dispatchError) {
+            console.error("Agent auto-dispatch failed:", dispatchError);
+            toast({
+              title: "Auto-dispatch failed",
+              description: "Report was saved, but automatic authority contact could not complete.",
+              variant: "destructive",
+            });
+          }
+        })();
+      }
     } catch (error) {
       console.error('Error saving incident:', error);
       toast({
@@ -237,15 +306,6 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
           </DialogDescription>
         </DialogHeader>
         
-        {/* Manual close button for debugging */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 text-xl font-bold"
-          type="button"
-        >
-          ×
-        </button>
-
         <form onSubmit={(e) => {
           e.preventDefault();
           console.log('ReportIssueModal: Form submitted via form element');
