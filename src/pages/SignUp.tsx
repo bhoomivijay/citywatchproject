@@ -165,8 +165,8 @@ const SignUp = () => {
       <div className="w-full max-w-md relative z-40">
         {/* Logo and Title */}
         <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-gradient-city rounded-lg flex items-center justify-center mx-auto mb-4">
-            <MapPin className="h-8 w-8 text-white" />
+          <div className="w-16 h-16 bg-primary rounded-lg flex items-center justify-center mx-auto mb-4">
+            <MapPin className="h-8 w-8 text-primary-foreground" />
           </div>
           <h1 className="text-3xl font-bold text-gradient mb-2">CityWatch</h1>
           <p className="text-muted-foreground">Create your account to get started</p>
@@ -179,8 +179,8 @@ const SignUp = () => {
               {isAdminSignup ? "Create Admin Account" : "Create Account"}
             </CardTitle>
             {isAdminSignup && (
-              <p className="text-sm text-yellow-600 font-medium">
-                🏆 Creating Administrator Account
+              <p className="text-sm text-primary font-medium">
+                Creating Administrator Account
               </p>
             )}
           </CardHeader>
@@ -296,7 +296,7 @@ const SignUp = () => {
               {/* Submit Button */}
               <Button
                 type="submit"
-                className="w-full btn-city btn-glow"
+                className="w-full btn-city"
                 disabled={isLoading}
               >
                 {isLoading ? (

@@ -165,6 +165,111 @@ export async function getNearestPlaceName(lat: number, lng: number): Promise<str
   }
 }
 
+export interface GeocodedAddress {
+  lat: number;
+  lng: number;
+  displayName: string;
+  label?: string;
+  subtitle?: string;
+}
+
+function formatPhotonFeature(feature: {
+  geometry?: { coordinates?: [number, number] };
+  properties?: Record<string, string | undefined>;
+}): GeocodedAddress | null {
+  const coords = feature.geometry?.coordinates;
+  if (!coords || coords.length < 2) return null;
+
+  const [lng, lat] = coords;
+  const p = feature.properties || {};
+  const streetLine = [p.housenumber, p.street].filter(Boolean).join(" ").trim();
+  const label = (p.name || streetLine || p.city || p.county || "").trim();
+  if (!label) return null;
+
+  const subtitleParts = [streetLine && streetLine !== label ? streetLine : "", p.district, p.city, p.state, p.country]
+    .map((part) => (part || "").trim())
+    .filter(Boolean)
+    .filter((part, index, arr) => arr.indexOf(part) === index && part !== label);
+
+  const displayName = [label, ...subtitleParts].join(", ");
+
+  return {
+    lat,
+    lng,
+    label,
+    subtitle: subtitleParts.join(", "),
+    displayName,
+  };
+}
+
+/** Autocomplete suggestions (Photon — fast, cab-app style). */
+export async function searchAddressSuggestions(
+  query: string,
+  options: { limit?: number; bias?: { lat: number; lng: number } } = {}
+): Promise<GeocodedAddress[]> {
+  const trimmed = query.trim();
+  if (trimmed.length < 2) return [];
+
+  const { limit = 6, bias } = options;
+
+  try {
+    let url = `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmed)}&limit=${limit}&lang=en`;
+    if (bias) {
+      url += `&lat=${bias.lat}&lon=${bias.lng}`;
+    }
+
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    const features = Array.isArray(data?.features) ? data.features : [];
+
+    return features
+      .map((feature: { geometry?: { coordinates?: [number, number] }; properties?: Record<string, string> }) =>
+        formatPhotonFeature(feature)
+      )
+      .filter((item: GeocodedAddress | null): item is GeocodedAddress => item != null);
+  } catch (error) {
+    console.warn("Address suggestion search failed:", error);
+    return [];
+  }
+}
+
+/** Forward geocode a typed address via Nominatim (free). */
+export async function searchAddress(query: string): Promise<GeocodedAddress | null> {
+  const suggestions = await searchAddressSuggestions(query, { limit: 1 });
+  if (suggestions.length > 0) return suggestions[0];
+
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  try {
+    const url =
+      `https://nominatim.openstreetmap.org/search?format=jsonv2` +
+      `&q=${encodeURIComponent(trimmed)}&limit=1&addressdetails=1`;
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "Accept-Language": "en",
+      },
+    });
+    if (!response.ok) return null;
+
+    const results = await response.json();
+    const hit = results?.[0];
+    if (!hit?.lat || !hit?.lon) return null;
+
+    return {
+      lat: Number(hit.lat),
+      lng: Number(hit.lon),
+      displayName: String(hit.display_name || trimmed).trim(),
+    };
+  } catch (error) {
+    console.warn("Address search failed:", error);
+    return null;
+  }
+}
+
 export async function resolveNearLocationLabel(args: {
   lat: number;
   lng: number;

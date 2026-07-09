@@ -61,30 +61,30 @@ const TrackReports = () => {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'pending':
-        return <Clock className="h-4 w-4 text-yellow-500" />;
+        return <Clock className="h-4 w-4 text-muted-foreground" />;
       case 'in-progress':
-        return <Clock className="h-4 w-4 text-blue-500" />;
+        return <Clock className="h-4 w-4 text-primary" />;
       case 'rejected':
-        return <XCircle className="h-4 w-4 text-red-500" />;
+        return <XCircle className="h-4 w-4 text-destructive" />;
       case 'resolved':
-        return <CheckCircle className="h-4 w-4 text-green-500" />;
+        return <CheckCircle className="h-4 w-4 text-foreground" />;
       default:
-        return <AlertCircle className="h-4 w-4 text-gray-500" />;
+        return <AlertCircle className="h-4 w-4 text-muted-foreground" />;
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending':
-        return "bg-yellow-500/20 text-yellow-600 border-yellow-500/30";
+        return "bg-muted/50 text-muted-foreground border-border";
       case 'in-progress':
-        return "bg-blue-500/20 text-blue-600 border-blue-500/30";
+        return "bg-primary/10 text-primary border-primary/30";
       case 'rejected':
-        return "bg-red-500/20 text-red-600 border-red-500/30";
+        return "bg-destructive/10 text-destructive border-destructive/30";
       case 'resolved':
-        return "bg-green-500/20 text-green-600 border-green-500/30";
+        return "bg-muted text-foreground border-border";
       default:
-        return "bg-gray-500/20 text-gray-600 border-gray-500/30";
+        return "bg-muted/50 text-muted-foreground border-border";
     }
   };
 
@@ -193,7 +193,7 @@ const TrackReports = () => {
             
             <Card className="card-city">
               <CardContent className="p-4">
-                <div className="text-2xl font-bold text-yellow-600">
+                <div className="text-2xl font-semibold text-muted-foreground">
                   {incidents.filter(inc => inc.status === 'pending').length}
                 </div>
                 <p className="text-sm text-muted-foreground">Pending</p>
@@ -202,7 +202,7 @@ const TrackReports = () => {
             
             <Card className="card-city">
               <CardContent className="p-4">
-                <div className="text-2xl font-bold text-blue-600">
+                <div className="text-2xl font-semibold text-primary">
                   {incidents.filter(inc => inc.status === 'in-progress').length}
                 </div>
                 <p className="text-sm text-muted-foreground">In Progress</p>
@@ -211,7 +211,7 @@ const TrackReports = () => {
             
             <Card className="card-city">
               <CardContent className="p-4">
-                <div className="text-2xl font-bold text-green-600">
+                <div className="text-2xl font-semibold text-foreground">
                   {incidents.filter(inc => inc.status === 'resolved').length}
                 </div>
                 <p className="text-sm text-muted-foreground">Resolved</p>
@@ -241,7 +241,7 @@ const TrackReports = () => {
               </Card>
             ) : (
               filteredIncidents.map((incident) => (
-                <Card key={incident.id} className="hover:shadow-md transition-shadow">
+                <Card key={incident.id} className="card-city hover:bg-muted/30 transition-colors">
                   <CardContent className="p-6">
                     <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6">
                       {/* Report Details */}
@@ -289,7 +289,7 @@ const TrackReports = () => {
                         )}
                         
                         {incident.aiAnalysis?.severity && (
-                          <Badge className={`text-sm px-3 py-1 ${getSeverityBadgeClass(getIncidentSeverity(incident))} text-white`}>
+                          <Badge className={`text-sm px-3 py-1 ${getSeverityBadgeClass(getIncidentSeverity(incident))}`}>
                             {formatSeverity(getIncidentSeverity(incident))}
                           </Badge>
                         )}

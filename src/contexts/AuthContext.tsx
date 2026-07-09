@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { User } from 'firebase/auth';
 import { AuthService, AuthUser } from '@/lib/auth-service';
+import { CITIZEN_BADGES } from '@/lib/firebase-services';
 import { auth } from '@/lib/firebase';
 
 interface AuthContextType {
@@ -83,7 +84,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             role: 'user',
             createdAt: new Date(),
             score: 0,
-            badge: '👤 New Citizen',
+            badge: CITIZEN_BADGES.NEW,
             totalReports: 0,
             acceptedReports: 0,
             rejectedReports: 0,
@@ -137,7 +138,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           role: 'user' as const,
           createdAt: new Date(),
           score: 0,
-          badge: '👤 New Citizen',
+          badge: CITIZEN_BADGES.NEW,
           totalReports: 0,
           acceptedReports: 0,
           rejectedReports: 0,
@@ -215,3 +216,5 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     </AuthContext.Provider>
   );
 };
+
+

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/contexts/AuthContext";
-import { getUserNotifications, getUserProfile, markNotificationAsRead, Notification, UserProfile } from "@/lib/firebase-services";
+import { getUserNotifications, getUserProfile, markNotificationAsRead, Notification, UserProfile, stripEmojis } from "@/lib/firebase-services";
 import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -147,21 +147,21 @@ export const NotificationBell = () => {
   const getNotificationIcon = (type: string) => {
     switch (type) {
       case 'incident_created':
-        return <Plus className="h-4 w-4 text-blue-400" />;
+        return <Plus className="h-4 w-4 text-primary" />;
       case 'incident_accepted':
-        return <CheckCircle className="h-4 w-4 text-green-400" />;
+        return <CheckCircle className="h-4 w-4 text-primary" />;
       case 'incident_rejected':
-        return <XCircle className="h-4 w-4 text-red-400" />;
+        return <XCircle className="h-4 w-4 text-destructive" />;
       case 'incident_in_progress':
-        return <Clock className="h-4 w-4 text-blue-400" />;
+        return <Clock className="h-4 w-4 text-primary" />;
       case 'incident_pending':
-        return <Clock className="h-4 w-4 text-yellow-400" />;
+        return <Clock className="h-4 w-4 text-muted-foreground" />;
       case 'badge_earned':
-        return <Trophy className="h-4 w-4 text-yellow-400" />;
+        return <Trophy className="h-4 w-4 text-primary" />;
       case 'points_earned':
-        return <Star className="h-4 w-4 text-blue-400" />;
+        return <Star className="h-4 w-4 text-primary" />;
       default:
-        return <Bell className="h-4 w-4 text-blue-400" />;
+        return <Bell className="h-4 w-4 text-muted-foreground" />;
     }
   };
 
@@ -189,7 +189,7 @@ export const NotificationBell = () => {
         <Bell className="h-4 w-4 mr-2" />
         Notifications
         {unreadCount > 0 && (
-          <Badge className="absolute -top-1 -right-1 h-5 w-5 rounded-full text-xs bg-red-500 text-white">
+          <Badge className="absolute -top-1 -right-1 h-5 w-5 rounded-full text-xs bg-primary text-primary-foreground">
             {unreadCount}
           </Badge>
         )}
@@ -198,41 +198,37 @@ export const NotificationBell = () => {
       {/* Notification Panel */}
       {isOpen && (
         <div 
-          className="absolute right-0 top-12 w-96 bg-slate-800 dark:bg-slate-900 border border-slate-600 dark:border-slate-700 rounded-xl shadow-2xl z-50"
+          className="absolute right-0 top-12 w-96 bg-card border border-border rounded-lg z-50"
           data-notification-panel
         >
           <Card className="border-0 shadow-none bg-transparent">
-            <CardHeader className="pb-4 bg-gradient-to-r from-slate-700 to-slate-800 dark:from-slate-800 dark:to-slate-900 rounded-t-xl">
+            <CardHeader className="pb-4 border-b border-border bg-muted/30 rounded-t-lg">
               <div className="flex items-center justify-between mb-3">
-                <CardTitle className="text-base font-semibold text-white flex items-center gap-2">
-                  <Bell className="h-4 w-4 text-blue-400" />
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                  <Bell className="h-4 w-4 text-primary" />
                   Notifications
                 </CardTitle>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => setIsOpen(false)}
-                  className="hover:bg-slate-600/50 rounded-full p-2 text-white"
+                  className="hover:bg-muted rounded-md p-2 text-muted-foreground"
                 >
-                  <X className="h-3 w-3 text-white" />
+                  <X className="h-3 w-3" />
                 </Button>
               </div>
               
               {/* Notification Count */}
-              <div className={`flex items-center justify-between p-4 rounded-lg ${
+              <div className={`flex items-center justify-between p-3 rounded-lg border ${
                 unreadCount > 0 
-                  ? 'bg-slate-600 border-2 border-slate-500 dark:bg-slate-700 dark:border-slate-600' 
-                  : 'bg-slate-700 border-2 border-slate-600 dark:bg-slate-800 dark:border-slate-700'
+                  ? 'bg-primary/10 border-primary/30' 
+                  : 'bg-muted/50 border-border'
               }`}>
-                <span className="text-sm font-semibold text-white">Notifications</span>
+                <span className="text-sm font-medium text-foreground">Notifications</span>
                 <div className="flex items-center space-x-3">
                   <Badge 
                     variant={unreadCount > 0 ? "default" : "secondary"} 
-                    className={`text-xs font-medium px-2 py-1 whitespace-nowrap ${
-                      unreadCount > 0 
-                        ? 'bg-blue-600 text-white hover:bg-blue-700' 
-                        : 'bg-slate-600 text-slate-300'
-                    }`}
+                    className="text-xs font-medium px-2 py-1 whitespace-nowrap"
                   >
                     {unreadCount > 0 ? `${unreadCount} unread` : 'All read'}
                   </Badge>
@@ -240,7 +236,7 @@ export const NotificationBell = () => {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-7 px-2 text-xs font-medium text-blue-400 hover:text-blue-300 hover:bg-slate-600/50 rounded-lg"
+                      className="h-7 px-2 text-xs font-medium text-primary hover:bg-muted rounded-md"
                       onClick={handleMarkAllAsRead}
                     >
                       Mark All Read
@@ -250,50 +246,42 @@ export const NotificationBell = () => {
               </div>
             </CardHeader>
 
-            <CardContent className="p-0 bg-slate-800 dark:bg-slate-900">
+            <CardContent className="p-0 bg-card">
               <ScrollArea className="h-80">
                 {notifications.length === 0 ? (
-                  <div className="text-center py-12 text-blue-400">
-                    <Bell className="h-10 w-10 mx-auto mb-3 opacity-60 text-blue-400" />
-                    <p className="text-sm font-medium text-white">No notifications yet</p>
-                    <p className="text-xs text-slate-400 mt-1">You're all caught up!</p>
+                  <div className="text-center py-12 text-muted-foreground">
+                    <Bell className="h-10 w-10 mx-auto mb-3 opacity-50" />
+                    <p className="text-sm font-medium text-foreground">No notifications yet</p>
+                    <p className="text-xs text-muted-foreground mt-1">You're all caught up!</p>
                   </div>
                 ) : (
-                  <div className="space-y-3 p-4">
+                  <div className="space-y-2 p-3">
                     {notifications.map((notification) => (
                       <div
                         key={notification.id}
-                        className={`p-4 rounded-xl border-2 transition-all duration-200 hover:shadow-md ${
+                        className={`p-3 rounded-lg border transition-colors ${
                           notification.isRead 
-                            ? 'bg-slate-700 border-slate-600 dark:bg-slate-800 dark:border-slate-700' 
-                            : 'bg-slate-600 border-slate-500 dark:bg-slate-700 dark:border-slate-600 shadow-sm'
+                            ? 'bg-muted/30 border-border' 
+                            : 'bg-primary/5 border-primary/20'
                         }`}
                       >
-                        <div className="flex items-start space-x-4">
+                        <div className="flex items-start space-x-3">
                           <div className="flex-shrink-0 mt-1">
                             {getNotificationIcon(notification.type)}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className={`text-sm font-semibold mb-2 ${
+                            <h4 className={`text-sm font-medium mb-1 ${
                               notification.isRead 
-                                ? 'text-slate-200' 
-                                : 'text-white'
+                                ? 'text-muted-foreground' 
+                                : 'text-foreground'
                             }`}>
-                              {notification.title}
+                              {stripEmojis(notification.title)}
                             </h4>
-                            <p className={`text-xs leading-relaxed mb-3 ${
-                              notification.isRead 
-                                ? 'text-slate-300' 
-                                : 'text-slate-200'
-                            }`}>
-                              {notification.message}
+                            <p className="text-xs leading-relaxed mb-2 text-muted-foreground">
+                              {stripEmojis(notification.message)}
                             </p>
                             <div className="flex items-center justify-between">
-                              <span className={`text-xs font-medium ${
-                                notification.isRead 
-                                  ? 'text-slate-400' 
-                                  : 'text-blue-400'
-                              }`}>
+                              <span className="text-xs text-muted-foreground">
                                 {notification.createdAt?.toDate().toLocaleDateString('en-US', {
                                   year: 'numeric',
                                   month: 'short',
@@ -306,7 +294,7 @@ export const NotificationBell = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-6 px-2 text-xs font-medium text-blue-400 hover:text-blue-300 hover:bg-slate-600/50 rounded-lg"
+                                  className="h-6 px-2 text-xs font-medium text-primary hover:bg-muted rounded-md"
                                   onClick={() => notification.id && handleMarkAsRead(notification.id)}
                                 >
                                   Mark Read

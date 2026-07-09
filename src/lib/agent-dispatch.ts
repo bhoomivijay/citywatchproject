@@ -45,10 +45,15 @@ const buildDispatchMessage = (args: {
   description: string;
   category: string;
   severity: number;
-  location: { lat: number; lng: number };
+  location: { lat: number; lng: number; address?: string };
   authorityName: string;
   incidentId: string;
 }): string => {
+  const coords = `${args.location.lat.toFixed(5)}, ${args.location.lng.toFixed(5)}`;
+  const locationLines = args.location.address?.trim()
+    ? [`Address: ${args.location.address.trim()}`, `Coordinates: ${coords}`]
+    : [`Location: ${coords}`];
+
   return [
     'CITYWATCH AGENTIC AUTO-ESCALATION',
     '---------------------------------',
@@ -58,7 +63,7 @@ const buildDispatchMessage = (args: {
     `Trusted Citizen Score: ${args.reporterScore}`,
     `Reporter: ${args.reporterName} <${args.reporterEmail}>`,
     `Authority Target: ${args.authorityName}`,
-    `Location: ${args.location.lat.toFixed(5)}, ${args.location.lng.toFixed(5)}`,
+    ...locationLines,
     `Map: https://www.openstreetmap.org/?mlat=${args.location.lat}&mlon=${args.location.lng}#map=16/${args.location.lat}/${args.location.lng}`,
     '',
     'Report:',
@@ -129,7 +134,7 @@ export const runAgenticAutoDispatch = async (args: {
   description: string;
   category: string;
   severity: number;
-  location: { lat: number; lng: number };
+  location: { lat: number; lng: number; address?: string };
   /** Skip mailto/tel popups (used when backfilling from admin dashboard) */
   silent?: boolean;
 }): Promise<AutoEscalationResult> => {

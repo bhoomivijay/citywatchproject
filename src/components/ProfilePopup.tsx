@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { User, Trophy, FileText, CheckCircle, XCircle, Clock, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { getUserProfile, UserProfile, getBadgeFromScore } from "@/lib/firebase-services";
+import { getUserProfile, UserProfile, getBadgeFromScore, CITIZEN_BADGES, normalizeBadgeLabel } from "@/lib/firebase-services";
 
 interface ProfilePopupProps {
   children: React.ReactNode;
@@ -54,11 +54,11 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
 
   const getCurrentBadge = (profile: UserProfile) => {
     if (profile.role === 'admin') {
-      return '👑 Administrator';
+      return 'Administrator';
     }
 
     // Always derive from score so UI matches thresholds (100 → Elite, 75 → Gold, etc.)
-    return getBadgeFromScore(Number(profile.score || 0)).badge;
+    return normalizeBadgeLabel(getBadgeFromScore(Number(profile.score || 0)).badge);
   };
 
   if (!userData) return null;
@@ -69,8 +69,8 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
         {children}
       </PopoverTrigger>
       <PopoverContent className="w-80 p-0" align="end">
-        <Card className="border-0 shadow-lg">
-          <CardHeader className="pb-3 bg-gradient-to-r from-primary/10 to-secondary/10">
+        <Card className="border border-border">
+          <CardHeader className="pb-3 border-b border-border bg-muted/30">
             <CardTitle className="flex items-center space-x-2 text-lg">
               <User className="h-5 w-5 text-primary" />
               <span>User Profile</span>
@@ -80,8 +80,8 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
           <CardContent className="space-y-4">
             {/* User Info */}
             <div className="text-center pb-3 border-b border-border/50">
-              <div className="w-16 h-16 bg-gradient-to-br from-primary to-secondary rounded-full flex items-center justify-center mx-auto mb-3">
-                <span className="text-2xl text-white font-bold">
+              <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-3">
+                <span className="text-2xl text-primary-foreground font-semibold">
                   {userData.displayName?.charAt(0)?.toUpperCase() || 'U'}
                 </span>
               </div>
@@ -108,10 +108,9 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
               {userProfile && userProfile.role !== 'admin' && (
                 <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
                   <div className="flex items-center space-x-2">
-                    <span className="text-lg">📊</span>
                     <span className="text-sm font-medium">Score</span>
                   </div>
-                  <span className="font-bold text-lg text-blue-600">
+                  <span className="font-semibold text-lg text-primary">
                     {userProfile.score} points
                   </span>
                 </div>
@@ -126,9 +125,9 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
               <div className="grid grid-cols-3 gap-2">
                 <div className="text-center p-2 bg-muted/20 rounded">
                   <div className="flex items-center justify-center mb-1">
-                    <FileText className="h-4 w-4 text-blue-500" />
+                    <FileText className="h-4 w-4 text-primary" />
                   </div>
-                  <div className="text-lg font-bold text-blue-500">{incidents.length}</div>
+                  <div className="text-lg font-semibold text-foreground">{incidents.length}</div>
                   <div className="text-xs text-muted-foreground">
                     {userProfile?.role === 'admin' ? 'All Reports' : 'Total'}
                   </div>
@@ -136,9 +135,9 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
                 
                 <div className="text-center p-2 bg-muted/20 rounded">
                   <div className="flex items-center justify-center mb-1">
-                    <CheckCircle className="h-4 w-4 text-green-500" />
+                    <CheckCircle className="h-4 w-4 text-primary" />
                   </div>
-                  <div className="text-lg font-bold text-green-500">{incidents.filter(inc => inc.status === 'resolved').length}</div>
+                  <div className="text-lg font-semibold text-foreground">{incidents.filter(inc => inc.status === 'resolved').length}</div>
                   <div className="text-xs text-muted-foreground">
                     {userProfile?.role === 'admin' ? 'Resolved' : 'Accepted'}
                   </div>
@@ -146,9 +145,9 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
                 
                 <div className="text-center p-2 bg-muted/20 rounded">
                   <div className="flex items-center justify-center mb-1">
-                    <XCircle className="h-4 w-4 text-red-500" />
+                    <XCircle className="h-4 w-4 text-muted-foreground" />
                   </div>
-                  <div className="text-lg font-bold text-red-500">{incidents.filter(inc => inc.status === 'rejected').length}</div>
+                  <div className="text-lg font-semibold text-foreground">{incidents.filter(inc => inc.status === 'rejected').length}</div>
                   <div className="text-xs text-muted-foreground">
                     {userProfile?.role === 'admin' ? 'Rejected' : 'Rejected'}
                   </div>
@@ -160,22 +159,17 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
             {userProfile && userProfile.role !== 'admin' && userProfile.score < 0 && (
               <div className={`p-3 rounded-lg border ${
                 userProfile.score < -80 
-                  ? 'bg-red-500/10 border-red-500/20' 
-                  : 'bg-yellow-500/10 border-yellow-500/20'
+                  ? 'bg-destructive/10 border-destructive/30' 
+                  : 'bg-muted/50 border-border'
               }`}>
                 <div className="flex items-center space-x-2">
-                  <span className="text-lg">
-                    {userProfile.score < -80 ? '🚫' : '⚠️'}
-                  </span>
                   <div>
                     <p className={`text-sm font-medium ${
-                      userProfile.score < -80 ? 'text-red-600' : 'text-yellow-600'
+                      userProfile.score < -80 ? 'text-destructive' : 'text-foreground'
                     }`}>
                       {userProfile.score < -80 ? 'Account Suspended' : 'Warning Zone'}
                     </p>
-                    <p className={`text-xs ${
-                      userProfile.score < -80 ? 'text-red-500' : 'text-yellow-500'
-                    }`}>
+                    <p className="text-xs text-muted-foreground">
                       {userProfile.score < -80 
                         ? 'Score below -80. Cannot submit reports.'
                         : 'Negative score. Improve to avoid suspension.'
@@ -190,7 +184,7 @@ export const ProfilePopup: React.FC<ProfilePopupProps> = ({ children, incidents 
             <Button 
               onClick={handleLogout}
               variant="outline" 
-              className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300"
+              className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <LogOut className="h-4 w-4 mr-2" />
               Logout

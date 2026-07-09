@@ -16,11 +16,11 @@ interface IncidentsListProps {
 export const IncidentsList = ({ incidents }: IncidentsListProps) => {
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case "pending": return <Clock className="h-3 w-3" />;
-      case "in-progress": return <Clock className="h-3 w-3 text-blue-500" />;
-      case "resolved": return <Clock className="h-3 w-3 text-green-500" />;
-      case "rejected": return <Clock className="h-3 w-3 text-red-500" />;
-      default: return <Clock className="h-3 w-3" />;
+      case "pending": return <Clock className="h-3 w-3 text-muted-foreground" />;
+      case "in-progress": return <Clock className="h-3 w-3 text-primary" />;
+      case "resolved": return <Clock className="h-3 w-3 text-foreground" />;
+      case "rejected": return <Clock className="h-3 w-3 text-destructive" />;
+      default: return <Clock className="h-3 w-3 text-muted-foreground" />;
     }
   };
 
@@ -63,7 +63,7 @@ export const IncidentsList = ({ incidents }: IncidentsListProps) => {
                 >
                   {/* Header with severity and status */}
                   <div className="flex items-center justify-between mb-2">
-                    <Badge className={`${getSeverityBadgeClass(getIncidentSeverity(incident))} text-white text-xs`}>
+                    <Badge className={`${getSeverityBadgeClass(getIncidentSeverity(incident))} text-xs`}>
                       {formatSeverity(getIncidentSeverity(incident))}
                     </Badge>
                     <div className="flex items-center space-x-1 text-xs text-muted-foreground">

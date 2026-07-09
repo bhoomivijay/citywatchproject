@@ -166,15 +166,7 @@ const Dashboard = () => {
   }, []);
 
   const handleOpenReportModal = () => {
-    if (selectedLocation) {
-      setIsReportModalOpen(true);
-    } else {
-      toast({
-        title: "No Location Selected",
-        description: "Please click on the map to select a location first.",
-        variant: "destructive"
-      });
-    }
+    setIsReportModalOpen(true);
   };
 
   const handleTrackReport = () => {
@@ -194,9 +186,9 @@ const Dashboard = () => {
   // Show error state if component crashed
   if (hasError) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-red-600 mb-4">Something went wrong</h1>
+          <h1 className="text-2xl font-semibold text-foreground mb-4">Something went wrong</h1>
           <p className="text-muted-foreground mb-4">The dashboard encountered an error. Please refresh the page.</p>
           <Button onClick={() => window.location.reload()}>Refresh Page</Button>
         </div>
@@ -210,8 +202,8 @@ const Dashboard = () => {
       <header className="backdrop-city border-b border-border/50 sticky top-0 z-40">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-gradient-city rounded-lg flex items-center justify-center">
-              <MapPin className="h-5 w-5 text-white" />
+            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+              <MapPin className="h-5 w-5 text-primary-foreground" />
             </div>
             <h1 className="text-xl font-bold text-gradient">CityWatch</h1>
           </div>
@@ -256,7 +248,7 @@ const Dashboard = () => {
                 <CardTitle className="text-sm font-medium text-muted-foreground">Total Reports</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-success">{incidents.length}</div>
+                <div className="text-2xl font-semibold text-foreground">{incidents.length}</div>
                 <p className="text-xs text-muted-foreground">All time incidents</p>
               </CardContent>
             </Card>
@@ -266,7 +258,7 @@ const Dashboard = () => {
                 <CardTitle className="text-sm font-medium text-muted-foreground">High Priority</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-accent">{incidents.filter(inc => inc.aiAnalysis?.severity && inc.aiAnalysis.severity >= 4).length}</div>
+                <div className="text-2xl font-semibold text-primary">{incidents.filter(inc => inc.aiAnalysis?.severity && inc.aiAnalysis.severity >= 4).length}</div>
                 <p className="text-xs text-muted-foreground">Severity 4-5</p>
               </CardContent>
             </Card>
@@ -280,14 +272,14 @@ const Dashboard = () => {
               </CardHeader>
               <CardContent className="space-y-2 relative z-30 pb-8">
                 <Button 
-                  className="btn-city btn-glow w-full justify-start" 
+                  className="btn-city w-full justify-start" 
                   onClick={handleOpenReportModal}
                 >
                   <Plus className="h-4 w-4 mr-2" />
                   Report Issue
                 </Button>
                 <Button 
-                  className="btn-city btn-glow w-full justify-start"
+                  className="btn-city w-full justify-start"
                   onClick={handleTrackReport}
                 >
                   <MapPin className="h-4 w-4 mr-2" />
@@ -334,7 +326,7 @@ const Dashboard = () => {
 
       {/* Floating Action Button */}
       <Button
-        className="fixed bottom-6 right-6 h-14 w-14 rounded-full btn-city btn-glow animate-glow shadow-city z-50"
+        className="fixed bottom-6 right-6 h-14 w-14 rounded-full btn-city z-50"
         onClick={handleOpenReportModal}
       >
         <Plus className="h-6 w-6" />
@@ -345,6 +337,7 @@ const Dashboard = () => {
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
         selectedLocation={selectedLocation}
+        onLocationSelect={handleLocationSelect}
         onIncidentAdded={(incidentId: string) => {
           console.log('Dashboard: Incident added with ID:', incidentId);
           // The modal will close automatically after this callback

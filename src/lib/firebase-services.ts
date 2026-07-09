@@ -273,7 +273,7 @@ export const addIncident = async (
       await addDoc(collection(db, 'notifications'), {
         userId: user.uid,
         type: 'incident_created',
-        title: 'Issue Reported Successfully! 📝',
+        title: 'Issue Reported Successfully!',
         message: `Your report "${incidentData.description.substring(0, 50)}..." has been submitted and is under review.`,
         incidentId: docRef.id,
         isRead: false,
@@ -319,7 +319,7 @@ export const saveAgentDispatchResult = async (
       await addDoc(collection(db, 'notifications'), {
         userId: 'admin',
         type: 'agent_auto_dispatch',
-        title: 'Agent Auto-Dispatch Triggered 🚨',
+        title: 'Agent Auto-Dispatch Triggered',
         message: `Trusted citizen severity-5 report ${incidentId} was auto-sent to ${cleanedDispatch.authorityName || 'emergency authorities'}.`,
         incidentId,
         isRead: false,
@@ -589,7 +589,7 @@ const handleIncidentAccepted = async (userId: string, incidentId: string, descri
     await addDoc(collection(db, 'notifications'), {
       userId,
       type: 'incident_accepted',
-      title: 'Issue Accepted! 🎉',
+      title: 'Issue Accepted!',
       message: `Your report "${description.substring(0, 50)}..." has been accepted and resolved. You earned +10 points!`,
       incidentId,
       points: 10,
@@ -622,7 +622,7 @@ const handleIncidentRejected = async (userId: string, incidentId: string, descri
     await addDoc(collection(db, 'notifications'), {
       userId,
       type: 'incident_rejected',
-      title: 'Issue Rejected ❌',
+      title: 'Issue Rejected',
       message: `Your report "${description.substring(0, 50)}..." was rejected. You lost -20 points.`,
       incidentId,
       points: -20,
@@ -646,7 +646,7 @@ const handleIncidentInProgress = async (userId: string, incidentId: string, desc
     await addDoc(collection(db, 'notifications'), {
       userId,
       type: 'incident_in_progress',
-      title: 'Issue Being Worked On 🔧',
+      title: 'Issue Being Worked On',
       message: `Your report "${description.substring(0, 50)}..." is now being processed by our team.`,
       incidentId,
       isRead: false,
@@ -666,7 +666,7 @@ const handleIncidentPending = async (userId: string, incidentId: string, descrip
     await addDoc(collection(db, 'notifications'), {
       userId,
       type: 'incident_pending',
-      title: 'Issue Status Changed ⏳',
+      title: 'Issue Status Changed',
       message: `Your report "${description.substring(0, 50)}..." status has been changed to pending for review.`,
       incidentId,
       isRead: false,
@@ -679,15 +679,40 @@ const handleIncidentPending = async (userId: string, incidentId: string, descrip
   }
 };
 
+/** Citizen badge labels (no emojis) */
+export const CITIZEN_BADGES = {
+  ELITE: 'Elite Citizen',
+  GOLD: 'Gold Citizen',
+  SILVER: 'Silver Citizen',
+  BRONZE: 'Bronze Citizen',
+  NEW: 'New Citizen',
+  WARNING: 'Warning Citizen',
+  SUSPENDED: 'Suspended Citizen',
+} as const;
+
+/** Remove emoji / symbol pictographs from display strings */
+export const stripEmojis = (text: string): string =>
+  text
+    .replace(
+      /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{200D}]/gu,
+      ''
+    )
+    .replace(/"\s+/g, '"')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+/** Strip leading emoji from legacy badge strings stored in Firestore */
+export const normalizeBadgeLabel = (badge: string): string => stripEmojis(badge);
+
 /** Derive citizen badge + recommendation flag from score */
 export const getBadgeFromScore = (score: number): { badge: string; isRecommended: boolean } => {
-  if (score >= 100) return { badge: '🏆 Elite Citizen', isRecommended: true };
-  if (score >= 75) return { badge: '⭐ Gold Citizen', isRecommended: true };
-  if (score >= 50) return { badge: '🥉 Silver Citizen', isRecommended: false };
-  if (score >= 25) return { badge: '🥉 Bronze Citizen', isRecommended: false };
-  if (score >= 0) return { badge: '👤 New Citizen', isRecommended: false };
-  if (score >= -80) return { badge: '⚠️ Warning Citizen', isRecommended: false };
-  return { badge: '🚫 Suspended Citizen', isRecommended: false };
+  if (score >= 100) return { badge: CITIZEN_BADGES.ELITE, isRecommended: true };
+  if (score >= 75) return { badge: CITIZEN_BADGES.GOLD, isRecommended: true };
+  if (score >= 50) return { badge: CITIZEN_BADGES.SILVER, isRecommended: false };
+  if (score >= 25) return { badge: CITIZEN_BADGES.BRONZE, isRecommended: false };
+  if (score >= 0) return { badge: CITIZEN_BADGES.NEW, isRecommended: false };
+  if (score >= -80) return { badge: CITIZEN_BADGES.WARNING, isRecommended: false };
+  return { badge: CITIZEN_BADGES.SUSPENDED, isRecommended: false };
 };
 
 // Check and update user badge based on score
@@ -702,19 +727,19 @@ export const checkAndUpdateBadge = async (userId: string) => {
     const { badge: newBadge, isRecommended } = getBadgeFromScore(Number(userData.score || 0));
 
     // Update badge if changed
-    if (newBadge !== userData.badge || isRecommended !== (userData.isRecommended || false)) {
+    if (newBadge !== normalizeBadgeLabel(userData.badge || '') || isRecommended !== (userData.isRecommended || false)) {
       await updateDoc(userRef, {
         badge: newBadge,
         isRecommended,
         updatedAt: serverTimestamp()
       });
 
-      if (newBadge !== userData.badge) {
+      if (newBadge !== normalizeBadgeLabel(userData.badge || '')) {
         // Send badge notification
         await addDoc(collection(db, 'notifications'), {
           userId,
           type: 'badge_earned',
-          title: 'New Badge Earned! 🏅',
+          title: 'New Badge Earned!',
           message: `Congratulations! You've earned the "${newBadge}" badge!`,
           badge: newBadge,
           isRead: false,

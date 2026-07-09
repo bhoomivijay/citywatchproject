@@ -9,11 +9,11 @@ export interface SeverityMeta {
 
 /** Single source of truth — matches AI analysis scale used across the app. */
 export const SEVERITY_SCALE: readonly SeverityMeta[] = [
-  { level: 1, label: "Low", hex: "#10b981", badgeClass: "severity-1" },
-  { level: 2, label: "Medium", hex: "#f59e0b", badgeClass: "severity-2" },
-  { level: 3, label: "High", hex: "#f97316", badgeClass: "severity-3" },
-  { level: 4, label: "Critical", hex: "#ef4444", badgeClass: "severity-4" },
-  { level: 5, label: "Emergency", hex: "#dc2626", badgeClass: "severity-5" },
+  { level: 1, label: "Low", hex: "#64748b", badgeClass: "severity-1" },
+  { level: 2, label: "Medium", hex: "#14b8a6", badgeClass: "severity-2" },
+  { level: 3, label: "High", hex: "#ca8a04", badgeClass: "severity-3" },
+  { level: 4, label: "Critical", hex: "#f97316", badgeClass: "severity-4" },
+  { level: 5, label: "Emergency", hex: "#ef4444", badgeClass: "severity-5" },
 ] as const;
 
 const severityByLevel = Object.fromEntries(

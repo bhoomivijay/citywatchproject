@@ -22,7 +22,7 @@ interface MapViewProps {
 const INDIA_CENTER = { lat: 20.5937, lng: 78.9629 };
 const MIN_MOVE_FOR_GEOCODE_METERS = 150;
 
-const USER_LOCATION_COLOR = "#7c3aed";
+const USER_LOCATION_COLOR = "#3b82f6";
 const SELECTED_REPORT_COLOR = "#3b82f6";
 
 const createCircleMarker = (
@@ -422,8 +422,8 @@ export const MapView = ({
       <div ref={mapRef} className="w-full h-full z-0" style={{ minHeight: "500px" }} />
 
       {mapStatus === "loading" && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-600 via-slate-700 to-slate-800 z-40">
-          <div className="text-center text-white">
+        <div className="absolute inset-0 flex items-center justify-center bg-background/95 z-40">
+          <div className="text-center text-foreground">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4" />
             <p className="text-lg font-medium">Loading map...</p>
           </div>
@@ -432,7 +432,7 @@ export const MapView = ({
 
       {mapStatus === "ready" && locationStatus === "locating" && (
         <div className="absolute top-4 left-4 z-[1000]">
-          <Card className="p-3 bg-card/90 backdrop-blur-sm border-primary/30">
+          <Card className="p-3 bg-card border border-border">
             <p className="text-sm font-medium flex items-center gap-2">
               <span className="animate-pulse h-2 w-2 rounded-full" style={{ backgroundColor: USER_LOCATION_COLOR }} />
               Detecting your location...
@@ -443,19 +443,19 @@ export const MapView = ({
 
       {locationStatus === "denied" && locationError && (
         <div className="absolute top-4 left-4 right-20 z-[1000]">
-          <Card className="p-3 bg-destructive/10 backdrop-blur-sm border-destructive/30">
+          <Card className="p-3 bg-destructive/10 border border-destructive/30">
             <p className="text-sm text-destructive">{locationError}</p>
           </Card>
         </div>
       )}
 
       {mapStatus === "error" && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-red-600 via-red-700 to-red-800 z-40">
-          <div className="text-center text-white p-6">
-            <h3 className="text-xl font-bold mb-2">Map Failed to Load</h3>
+        <div className="absolute inset-0 flex items-center justify-center bg-background/95 z-40">
+          <div className="text-center text-foreground p-6">
+            <h3 className="text-xl font-semibold mb-2">Map Failed to Load</h3>
             <Button
               onClick={() => window.location.reload()}
-              className="mt-4 bg-white text-red-800 hover:bg-gray-100"
+              className="mt-4 btn-city"
             >
               Retry Loading
             </Button>
@@ -468,14 +468,14 @@ export const MapView = ({
           size="sm"
           onClick={handleRefreshLocation}
           disabled={isLocating}
-          className="bg-card/80 backdrop-blur-sm hover:bg-card/90 text-foreground border border-border/50"
+          className="bg-card hover:bg-muted text-foreground border border-border"
         >
           <MapPin className="h-4 w-4 mr-2" />
           {isLocating ? "Locating..." : "Refresh Location"}
         </Button>
       </div>
 
-      <Card className="absolute bottom-4 left-4 p-3 bg-card/80 backdrop-blur-sm z-[1000] max-w-[200px]">
+      <Card className="absolute bottom-4 left-4 p-3 bg-card border border-border z-[1000] max-w-[200px]">
         <div className="text-xs font-medium mb-2">Map legend</div>
         <div className="space-y-2 text-xs">
           <div className="space-y-1">

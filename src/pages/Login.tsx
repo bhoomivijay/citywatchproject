@@ -197,14 +197,14 @@ const Login = () => {
           backgroundImage: `url(${citySkyline})`
         }}
       >
-        <div className="absolute inset-0 bg-gradient-skyline" />
+        <div className="absolute inset-0 bg-background/80" />
       </div>
 
-      {/* Floating geometric shapes */}
+      {/* Decorative shapes */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 left-20 w-20 h-20 bg-primary/10 rounded-full animate-float" />
-        <div className="absolute top-40 right-32 w-16 h-16 bg-accent/10 rotate-45 animate-float" style={{ animationDelay: "1s" }} />
-        <div className="absolute bottom-32 left-1/4 w-12 h-12 bg-secondary/10 rounded-full animate-float" style={{ animationDelay: "2s" }} />
+        <div className="absolute top-20 left-20 w-20 h-20 border border-border/40 rounded-full" />
+        <div className="absolute top-40 right-32 w-16 h-16 border border-border/40 rotate-45" />
+        <div className="absolute bottom-32 left-1/4 w-12 h-12 border border-border/40 rounded-full" />
       </div>
 
       {/* Login Card */}
@@ -263,7 +263,7 @@ const Login = () => {
                 </div>
                 <Button 
                   type="submit" 
-                  className="btn-city btn-glow w-full"
+                  className="btn-city w-full"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -308,7 +308,7 @@ const Login = () => {
                 </div>
                 <Button 
                   type="submit" 
-                  className="btn-city btn-glow w-full"
+                  className="btn-city w-full"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -329,8 +329,8 @@ const Login = () => {
 
           {/* Error Display */}
           {error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-              <p className="text-red-600 text-sm">{error}</p>
+            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3">
+              <p className="text-destructive text-sm">{error}</p>
             </div>
           )}
 

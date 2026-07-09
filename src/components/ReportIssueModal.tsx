@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,16 +10,19 @@ import { addIncident, isUserSuspended, isUserInWarningZone, saveAgentDispatchRes
 import { analyzeIssue as runIssueAnalysis } from "@/lib/issue-analysis";
 import { getSeverityBadgeClass, getSeverityLabel } from "@/lib/severity";
 import { runAgenticAutoDispatch, shouldAutoEscalate } from "@/lib/agent-dispatch";
+import { getNearestPlaceName, searchAddress, GeocodedAddress } from "@/lib/location-label";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { useAuth } from "@/contexts/AuthContext";
 
 interface ReportIssueModalProps {
   isOpen: boolean;
   onClose: () => void;
   selectedLocation?: {lat: number, lng: number} | null;
-  onIncidentAdded?: (incidentId: string) => void; // Callback when incident is added
+  onLocationSelect?: (location: { lat: number; lng: number }) => void;
+  onIncidentAdded?: (incidentId: string) => void;
 }
 
-export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncidentAdded }: ReportIssueModalProps) => {
+export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onLocationSelect, onIncidentAdded }: ReportIssueModalProps) => {
   const [description, setDescription] = useState("");
   const [aiSummary, setAiSummary] = useState("");
   const [severity, setSeverity] = useState<number | undefined>(undefined);
@@ -28,6 +31,11 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSuspended, setIsSuspended] = useState(false);
   const [isInWarningZone, setIsInWarningZone] = useState(false);
+  const [address, setAddress] = useState("");
+  const [isResolvingAddress, setIsResolvingAddress] = useState(false);
+  const addressEditedRef = useRef(false);
+  const mapSuggestedAddressRef = useRef("");
+  const pickedAddressCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
   
   // Debug: Track description changes
   useEffect(() => {
@@ -63,6 +71,42 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
     
     checkUserStatus();
   }, [userData?.uid]);
+
+  // Reset form when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setAddress("");
+      addressEditedRef.current = false;
+      mapSuggestedAddressRef.current = "";
+      pickedAddressCoordsRef.current = null;
+    }
+  }, [isOpen]);
+
+  // Suggest address from map pin (reverse geocode)
+  useEffect(() => {
+    if (!selectedLocation || addressEditedRef.current) return;
+
+    let cancelled = false;
+    const loadAddress = async () => {
+      setIsResolvingAddress(true);
+      try {
+        const place = await getNearestPlaceName(selectedLocation.lat, selectedLocation.lng);
+        if (!cancelled && place && !addressEditedRef.current) {
+          mapSuggestedAddressRef.current = place;
+          setAddress(place);
+        }
+      } catch (error) {
+        console.warn("Could not resolve address for map pin:", error);
+      } finally {
+        if (!cancelled) setIsResolvingAddress(false);
+      }
+    };
+
+    void loadAddress();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLocation?.lat, selectedLocation?.lng]);
 
   const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
   const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -131,10 +175,10 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
       return;
     }
 
-    if (!selectedLocation) {
+    if (!selectedLocation && !address.trim()) {
       toast({
         title: "Location Required",
-        description: "Please select a location on the map first.",
+        description: "Select a location on the map or type an address.",
         variant: "destructive"
       });
       return;
@@ -154,13 +198,93 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
       if (!userData?.uid) {
         throw new Error('User not authenticated. Please login again.');
       }
+
+      let resolvedLat: number | undefined;
+      let resolvedLng: number | undefined;
+      let resolvedAddress = address.trim();
+
+      const getFallbackCoords = (): { lat: number; lng: number } => {
+        if (selectedLocation) {
+          return { lat: selectedLocation.lat, lng: selectedLocation.lng };
+        }
+        try {
+          const stored = localStorage.getItem("userLocation");
+          if (stored) {
+            const parsed = JSON.parse(stored) as { lat?: number; lng?: number };
+            if (parsed?.lat != null && parsed?.lng != null) {
+              return { lat: parsed.lat, lng: parsed.lng };
+            }
+          }
+        } catch {
+          // ignore parse errors
+        }
+        return { lat: 20.5937, lng: 78.9629 };
+      };
+
+      const typedAddressOverridesMap =
+        resolvedAddress.length > 0 &&
+        (addressEditedRef.current ||
+          resolvedAddress.toLowerCase() !== mapSuggestedAddressRef.current.toLowerCase());
+
+      const geocodeTypedAddress = async (): Promise<boolean> => {
+        if (!resolvedAddress) return false;
+
+        if (pickedAddressCoordsRef.current) {
+          resolvedLat = pickedAddressCoordsRef.current.lat;
+          resolvedLng = pickedAddressCoordsRef.current.lng;
+          return true;
+        }
+
+        setIsResolvingAddress(true);
+        try {
+          const geocoded = await searchAddress(resolvedAddress);
+          if (geocoded) {
+            resolvedLat = geocoded.lat;
+            resolvedLng = geocoded.lng;
+            resolvedAddress = geocoded.displayName;
+            return true;
+          }
+
+          const fallback = getFallbackCoords();
+          resolvedLat = fallback.lat;
+          resolvedLng = fallback.lng;
+          toast({
+            title: "Address could not be verified",
+            description: selectedLocation
+              ? "Your typed address was saved. Map pin coordinates were used."
+              : "Your typed address was saved with approximate coordinates.",
+          });
+          return true;
+        } finally {
+          setIsResolvingAddress(false);
+        }
+      };
+
+      if (typedAddressOverridesMap) {
+        await geocodeTypedAddress();
+      } else if (selectedLocation) {
+        resolvedLat = selectedLocation.lat;
+        resolvedLng = selectedLocation.lng;
+      } else if (resolvedAddress) {
+        await geocodeTypedAddress();
+      }
+
+      if (resolvedLat == null || resolvedLng == null) {
+        toast({
+          title: "Location Required",
+          description: "Select a location on the map or type an address.",
+          variant: "destructive",
+        });
+        return;
+      }
       
       // First, add the incident to Firebase
       const incidentData = {
         description: description,
         location: {
-          lat: selectedLocation.lat,
-          lng: selectedLocation.lng
+          lat: resolvedLat,
+          lng: resolvedLng,
+          ...(resolvedAddress ? { address: resolvedAddress } : {}),
         }
       };
 
@@ -210,8 +334,9 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
       const submitCategory = category || "Other";
       const submitSeverity = severity;
       const submitLocation = {
-        lat: selectedLocation.lat,
-        lng: selectedLocation.lng,
+        lat: resolvedLat,
+        lng: resolvedLng,
+        ...(resolvedAddress ? { address: resolvedAddress } : {}),
       };
 
       // Reset + close immediately so the user never has to dismiss the modal manually.
@@ -220,6 +345,10 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
       setSeverity(undefined);
       setCategory("");
       setAiProvider("");
+      setAddress("");
+      addressEditedRef.current = false;
+      mapSuggestedAddressRef.current = "";
+      pickedAddressCoordsRef.current = null;
       onClose();
 
       toast({
@@ -295,7 +424,7 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="card-city max-w-md animate-slide-up z-[9999]">
+      <DialogContent className="card-city max-w-md animate-slide-up z-[9999] overflow-visible">
         <DialogHeader>
           <DialogTitle className="flex items-center space-x-2">
             <AlertTriangle className="h-5 w-5 text-primary" />
@@ -311,13 +440,43 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
           console.log('ReportIssueModal: Form submitted via form element');
           handleSubmit();
         }} className="space-y-4 relative z-30">
-          {/* Location Display */}
-          {selectedLocation && (
-            <div className="flex items-center space-x-2 text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
-              <MapPin className="h-4 w-4" />
-              <span>Location: {selectedLocation.lat.toFixed(4)}, {selectedLocation.lng.toFixed(4)}</span>
+          {/* Location */}
+          <div className="space-y-3">
+            {selectedLocation && (
+              <div className="flex items-center space-x-2 text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg border border-border">
+                <MapPin className="h-4 w-4 shrink-0 text-primary" />
+                <span>
+                  Map pin: {selectedLocation.lat.toFixed(4)}, {selectedLocation.lng.toFixed(4)}
+                </span>
+              </div>
+            )}
+
+            <div className="space-y-2 overflow-visible">
+              <Label htmlFor="address">Address</Label>
+              <AddressAutocomplete
+                id="address"
+                value={address}
+                bias={selectedLocation ?? undefined}
+                externalLoading={isResolvingAddress}
+                placeholder="Search address, landmark, or area"
+                onChange={(next) => {
+                  addressEditedRef.current = true;
+                  pickedAddressCoordsRef.current = null;
+                  setAddress(next);
+                }}
+                onSelect={(suggestion: GeocodedAddress) => {
+                  addressEditedRef.current = true;
+                  mapSuggestedAddressRef.current = suggestion.displayName;
+                  pickedAddressCoordsRef.current = { lat: suggestion.lat, lng: suggestion.lng };
+                  setAddress(suggestion.displayName);
+                  onLocationSelect?.({ lat: suggestion.lat, lng: suggestion.lng });
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Start typing to see suggestions, or pick a point on the map.
+              </p>
             </div>
-          )}
+          </div>
 
           {/* Description */}
           <div className="space-y-2">
@@ -342,7 +501,7 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
               analyzeIssue();
             }}
             disabled={!description.trim() || isAnalyzing}
-            className="w-full bg-gradient-to-r from-primary to-secondary text-white hover:opacity-90 relative z-30"
+            className="w-full btn-city relative z-30"
           >
             <Sparkles className="h-4 w-4 mr-2" />
             {isAnalyzing ? "Analyzing..." : "Analyze with AI"}
@@ -374,7 +533,7 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
                 <div>
                   <Label className="text-xs text-muted-foreground">Severity Level</Label>
                   <div className="flex items-center space-x-2 mt-1">
-                    <Badge className={`${getSeverityBadgeClass(severity)} text-white`}>
+                    <Badge className={getSeverityBadgeClass(severity)}>
                       Level {severity}
                     </Badge>
                     <span className="text-sm text-muted-foreground">
@@ -388,12 +547,12 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
 
           {/* Warning Zone Alert */}
           {isInWarningZone && !isSuspended && (
-            <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-              <div className="flex items-center space-x-2 text-yellow-600">
-                <AlertTriangle className="h-4 w-4" />
+            <div className="p-4 bg-muted/50 border border-border rounded-lg">
+              <div className="flex items-center space-x-2 text-foreground">
+                <AlertTriangle className="h-4 w-4 text-primary" />
                 <span className="text-sm font-medium">Warning Zone</span>
               </div>
-              <p className="text-xs text-yellow-500 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 Your score is negative. Improve your score to avoid suspension. Score below -80 will result in account suspension.
               </p>
             </div>
@@ -401,12 +560,12 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
 
           {/* Suspension Warning */}
           {isSuspended && (
-            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-              <div className="flex items-center space-x-2 text-red-600">
+            <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg">
+              <div className="flex items-center space-x-2 text-destructive">
                 <AlertTriangle className="h-4 w-4" />
                 <span className="text-sm font-medium">Account Suspended</span>
               </div>
-              <p className="text-xs text-red-500 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 Your account has been suspended due to low score (below -80). You cannot submit reports until your score improves.
               </p>
             </div>
@@ -427,7 +586,7 @@ export const ReportIssueModal = ({ isOpen, onClose, selectedLocation, onIncident
             </Button>
             <Button 
               type="submit"
-              className="flex-1 btn-city btn-glow relative z-30"
+              className="flex-1 btn-city relative z-30"
               disabled={!description.trim() || !aiSummary || !category || !severity || isSuspended}
             >
               <Send className="h-4 w-4 mr-2" />
